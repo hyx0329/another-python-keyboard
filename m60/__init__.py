@@ -37,8 +37,8 @@ class KeyboardHardware:
 		self._matrix = Matrix()
 		self._key_mask = 0
 		self._key_count = self._matrix.key_count
-		self._key_events_size = 0
-		self._key_events = [0] * (self._key_count + 1)
+		self._key_events_length = 0
+		self._key_events = [0] * self._key_count
 		self._key_events_head = 0
 		self._key_events_tail = 0
 		self._battery_update_callback = lambda x: None
@@ -47,24 +47,26 @@ class KeyboardHardware:
 		self.get_raw_keys = self._matrix.get_raw_keys
 	
 	def _put(self, value):
-		if self._key_events_size >= self._key_count:
-			return
-		self._key_events[self._key_events_tail] = value
-		self._key_events_tail = (self._key_events_tail + 1) % self._key_count
-		self._key_events_size += 1
+		if self._key_events_length < self._key_count:
+			self._key_events[self._key_events_tail] = value
+			self._key_events_tail = ( self._key_events_tail + 1 ) % self._key_count
+			self._key_events_length += 1
 
 	def _get(self):
-		if self._key_events_size <= 0:
-			return None
-		value = self._key_events[self._key_events_head]
-		self._key_events_head = (self._key_events_head + 1) % self._key_count
-		self._key_events_size -= 1
-		return value
+		if self._key_events_length > 0:
+			value = self._key_events[self._key_events_head]
+			self._key_events_head = ( self._key_events_head + 1 ) % self._key_count
+			self._key_events_length -= 1
+			return value
 
-	get = _get
+	def __next__(self):
+		if self._key_events_length == 0:
+			raise StopIteration
+		else:
+			return self._get()
 
 	def __len__(self):
-		return self._key_events_size
+		return self._key_events_length
 
 	def __getitem__(self):
 		return self._get()
@@ -72,16 +74,9 @@ class KeyboardHardware:
 	def __iter__(self):
 		return self
 
-	def __next__(self):
-		if self._key_events_size == 0:
-			raise StopIteration
-		value = self._key_events[self._key_events_head]
-		self._key_events_head = (self._key_events_head + 1) % self._key_events_size
-		self._key_events_size -= 1
-		return value
-
 	async def scan_routine(self):
 		# scan keys
+		# This is a place holder
 		while True:
 			await asyncio.sleep(0)
 
@@ -93,17 +88,22 @@ class KeyboardHardware:
 
 	async def get_keys(self):
 		# generate key events and return events count
-		# BTW for masks: 0 means inactive, 1 means active
+		# BTW for masks: 0 means inactive(released up), 1 means active(pressed down)
 		# for events, set 0x80 if key becomes inactive 
-		last_mask = self._key_mask
-		mask = await self._matrix.get_raw_keys()
+		old_mask = self._key_mask
+		new_mask = await self._matrix.get_raw_keys()
+		self._key_mask = new_mask
 		for i in range(self._key_count):
 			imask = 1 << i
-			status = imask & mask
-			changed = (status ^ last_mask) & imask
-			if changed > 0:
-				self._put( 0x80 | i if status == 0 else i )
-		self._key_mask = mask
+			old_status = old_mask & imask
+			new_status = new_mask & imask
+			up = old_status > new_status
+			down = old_status < new_status
+			if up: # released
+				self._put( 0x80 | i )
+			elif down: # pressed
+				self._put( i )
+			# otherwise no change
 		return self.__len__()
 
 	@property
@@ -117,7 +117,7 @@ class KeyboardHardware:
 		return 0b11
 
 	async def get_battery_level(self):
-		return battery_level
+		return battery_level()
 
 	async def set_keyboard_led(self):
 		pass

@@ -166,18 +166,17 @@ class Keyboard:
 		mouse_action = 0
 
 		while True:
+			# switch task, give some time to the scanner
 			await asyncio.sleep(0)
 			event_count = await input_hardware.get_keys()
 			# TODO: here add pair key detection and tap key detection
 
-			if event_count > 0:
-				print(event_count)
-			else:
+			if event_count == 0:
 				continue
 
 			for event in input_hardware:
 				key_id = event & 0x7F
-				press = key_id & 0x80 == 0
+				press = (event & 0x80) == 0
 				if press:
 					action_code = self._get_action_code(key_id)
 					keys_last_action_code[key_id] = action_code
@@ -210,6 +209,11 @@ class Keyboard:
 					elif key_variant == ACT_COMMAND:
 						self._handle_action_command(action_code)
 					# if required, log here
+					print(
+						"{} {} \\ {}".format(
+							key_id, self.key_name(key_id), hex(action_code)
+						)
+					)
 
 				else: # release
 					action_code = keys_last_action_code[key_id]
@@ -235,6 +239,11 @@ class Keyboard:
 						pass
 
 					# if required, log here
+					print(
+						"{} {} / {}".format(
+							key_id, self.key_name(key_id), hex(action_code)
+						)
+					)
 
 		if mouse_action != 0:
 			pass

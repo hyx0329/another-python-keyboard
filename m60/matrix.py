@@ -32,7 +32,7 @@ class Matrix:
 			self.cols.append(io)
 		
 		self.pressed = bool(self.ROW2COL)
-		self.mask = 0
+		self.mask = 0 # remeber last state, for noise filtering
 		self.key_val = [0] * self.key_count # for noise filtering
 
 	async def scan_routine(self):
@@ -50,9 +50,9 @@ class Matrix:
 					key_index += 1
 					# TODO: make parameter variable
 					if col.value == pressed:
-						key_val[key_index] = min(key_val[key_index] + 1, 16)
+						key_val[key_index] = ((key_val[key_index] << 1) | 1) & 0xF
 					else:
-						key_val[key_index] = max(key_val[key_index] - 1, 0)
+						key_val[key_index] >>= 1
 				row.value = not pressed
 			key_index = -1
 			# switch task
@@ -63,19 +63,18 @@ class Matrix:
 		# key up/down events are not generated here
 		key_val = self.key_val
 		mask = self.mask
-		enable_thresh = 8
-		disable_thresh = 3
+		enable_thresh = 0x7
+		disable_thresh = 0x2
 		
 		# check changes
 		for key_index in range(self.key_count):
 			key_mask = 1 << key_index
 			if key_val[key_index] > enable_thresh:
 				mask |= key_mask
-			elif key_val[key_index] < enable_thresh:
+			elif key_val[key_index] < disable_thresh:
 				mask &= ~key_mask
 
 		# update result
 		self.mask = mask
-		print("{:0>64b}".format(mask))
 		return mask
 
