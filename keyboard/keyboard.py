@@ -32,10 +32,16 @@ class Keyboard:
 
 	def initialize(self):
 		# check then setup basics
-		assert hasattr(self.hardware, "get_all_tasks")
-		assert hasattr(self.hardware, "get_keys")
+		self._check_hardware_api(hardware)
 		params = self._generate_hid_manager_parameters(self.hardware.hardware_spec)
 		self.hid_manager = HIDDeviceManager(*params)
+	
+	def _check_hardware_api(self, hardware):
+		assert hasattr(self.hardware, "get_all_tasks")
+		assert hasattr(self.hardware, "get_keys")
+		assert hasattr(self.hardware, "hardware_spec")
+		assert hasattr(self.hardware, "key_name")
+		iter(self.hardware)  # hardware should be iterable ( to get key events )
 	
 	def _generate_hid_manager_parameters(self, hardware_spec):
 		params = dict()
