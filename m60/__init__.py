@@ -36,7 +36,6 @@ class KeyboardHardware:
 	#  get_all_tasks()
 	#  get_keys()
 	#  iterator
-	#  len()
 	#  hardware_spec
 	#  key_name(can be dummy)
 
@@ -94,7 +93,7 @@ class KeyboardHardware:
 		# generate key events and return events count
 		# BTW for masks: 0 means inactive(released up), 1 means active(pressed down)
 		# for events, set 0x80 if key becomes inactive 
-		# here we convert the raw ID to the relative position in the Keymap
+		# here we convert the raw ID to the position in the Keymap
 		# note the key ID should not exceed 0x7F(127), which should be sufficient
 		old_mask = self._key_mask
 		new_mask = await self.get_raw_keys()

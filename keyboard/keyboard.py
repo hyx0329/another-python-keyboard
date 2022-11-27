@@ -4,6 +4,9 @@
 import array
 import struct
 import asyncio
+import adafruit_logging as logging
+logger = logging.getLogger("Keyboard Core")
+logger.setLevel(logging.DEBUG)
 
 from .utils import do_nothing
 # TODO: explict import
@@ -32,7 +35,8 @@ class Keyboard:
 
 	def initialize(self):
 		# check then setup basics
-		self._check_hardware_api(hardware)
+		logger.debug("Initialize the hardware and hid_manager")
+		self._check_hardware_api(self.hardware)
 		params = self._generate_hid_manager_parameters(self.hardware.hardware_spec)
 		self.hid_manager = HIDDeviceManager(*params)
 	
@@ -58,7 +62,7 @@ class Keyboard:
 		hid_tasks = self.hid_manager.get_all_tasks()
 		hardware_tasks = self.hardware.get_all_tasks()
 		tasks = own_tasks + hid_tasks + hardware_tasks
-		# print("running %d tasks" % len(tasks))
+		logger.info("Start running %d tasks" % len(tasks))
 		await asyncio.gather(*tasks)
 
 	def get_all_tasks(self):
@@ -164,14 +168,17 @@ class Keyboard:
 			await asyncio.sleep(0)
 			event_count = await input_hardware.get_keys()
 			# TODO: here add pair key detection and tap key detection
-
 			if event_count == 0:
 				continue
+			# only log if non-zero to tidy up
+			logger.debug("Key events count: %d" % event_count)
 
 			for event in input_hardware:
 				# the key_id is the relative ID in the keymap
 				key_id = event & 0x7F
 				press = (event & 0x80) == 0
+				logger.debug("Processing key event: %d | %d" % (key_id, press))
+
 				if press:
 					action_code = self._get_action_code(key_id)
 					keys_last_action_code[key_id] = action_code
@@ -203,12 +210,10 @@ class Keyboard:
 						pass
 					elif key_variant == ACT_COMMAND:
 						self._handle_action_command(action_code)
-					# if required, log here
-					print(
-						"{} {} \\ {}".format(
+					logger.info(
+							"Got {} {:10} \\ {}".format(
 							key_id, self.hardware.key_name(key_id), hex(action_code)
-						)
-					)
+						))
 
 				else: # release
 					action_code = keys_last_action_code[key_id]
@@ -234,11 +239,10 @@ class Keyboard:
 						pass
 
 					# if required, log here
-					print(
-						"{} {} / {}".format(
+					logger.info(
+							"Got {} {:10} / {}".format(
 							key_id, self.hardware.key_name(key_id), hex(action_code)
-						)
-					)
+						))
 
 		if mouse_action != 0:
 			pass

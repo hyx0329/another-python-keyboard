@@ -8,6 +8,8 @@
 import struct
 import time
 import microcontroller
+import adafruit_logging as logging
+logger = logging.getLogger("HID Manager")
 
 # USB interface
 import usb_hid
@@ -108,6 +110,8 @@ class HIDDeviceManager:
 		#self.report_gamepad = None
 		self._usb_status = 0
 
+		self._interfaces = dict()
+
 		self.__initialize_usb_interface()
 		if enable_ble and BLE_AVAILABLE:
 			use_battry_service = kwargs.get("ble_battery", False)
@@ -119,20 +123,20 @@ class HIDDeviceManager:
 		tasks = list()
 		return tasks
 
-	def initialize_usb_interface(self):
+	def __initialize_usb_interface(self):
+		logger.debug("Initializing USB HID interface")
 		# NOTE: the USB interfaces can only be changed at boot time(boot.py)
-		self._hid_usb = HIDInterfaceWrapper(usb_hid.devices)
+		self._interfaces["usb"] = HIDInterfaceWrapper(usb_hid.devices)
 
-	__initialize_usb_interface = initialize_usb_interface
-
-	def initialize_ble_interface(self, battery = False):
+	def __initialize_ble_interface(self, battery = False):
 		# The bluetooth hid interface uses predefined descriptor consists of
 		# keyboard, mouse, and consumer control (read HIDDevice's doc)
 		# to add a gamepad, need to write a suitable descriptor
+		logger.debug("Initializing BLE HID interface")
 		self._ble_radio = BLERadio()
 		ble_services = list()
 		self._hid_ble_handle = HIDService()
-		self._hid_ble = HIDInterfaceWrapper(self._hid_ble_handle.devices)
+		self._interfaces["ble"] = HIDInterfaceWrapper(self._hid_ble_handle.devices)
 		ble_services.append(self._hid_ble_handle)
 		if battery:
 			self._ble_battery = BatteryService()
@@ -144,15 +148,14 @@ class HIDDeviceManager:
 		self._ble_id = 1
 		self._ble_advertise_stop_time = -1
 
-	__initialize_ble_interface = initialize_ble_interface
-
 	def _auto_select_device(self):
-		if hasattr(self, "_hid_usb") and is_usb_connected():
-			return self._hid_usb
-		elif hasattr(self, "_hid_ble"):
-			return self._hid_ble
-		else:
-			return self._hid_usb
+		if self._interfaces.get("usb", None) and is_usb_connected():
+			return self._interfaces.get("usb")
+		elif self._interfaces.get("ble", None):
+			return self._interfaces.get("ble")
+		elif self._interfaces.get("usb", None):
+			return self._interfaces.get("usb")
+		raise RuntimeError("No valid interface!")
 	
 	def _ble_generate_static_mac(self, n):
 		n = abs(n) & 10
@@ -174,7 +177,7 @@ class HIDDeviceManager:
 
 	async def check(self):
 		# check BLE & USB
-		if hasattr(self, "_hid_ble"):
+		if "ble" in self._interfaces.keys():
 			if self._ble_advertise_stop_time > 0:
 				if self._ble_advertise_stop_time < time.time():
 					await self.ble_advertisement_stop()
@@ -202,14 +205,17 @@ class HIDDeviceManager:
 		await self._send_mouse()
 
 	async def switch_to_usb(self):
-		await self._release_all()
-		self.current_interface = self._hid_usb
+		interface = self._interfaces.get("usb", None)
+		if interface:
+			await self._release_all()
+			self.current_interface = interface
 
 	async def switch_to_ble(self):
-		await self._release_all()
-		self.current_interface = self._hid_ble
-		if not self.ble_is_connected:
-			self.ble_advertisement_start(timeout = 60)
+		interface = self._interfaces.get("ble", None)
+		if interface:
+			await self._release_all()
+			if not self.ble_is_connected:
+				self.ble_advertisement_start(timeout = 60)
 
 	## (USB &) BLE interface control
 
