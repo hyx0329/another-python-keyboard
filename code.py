@@ -15,7 +15,7 @@ keymap_norman = keymaps['norman']
 ### initialize keyboard
 
 keyboard.register_hardware(m60)
-keyboard.register_keymap(keymap_qwerty_plain)
+keyboard.register_keymap(default_keymap)
 
 # ESC(0)    1(1)   2(2)   3(3)   4(4)   5(5)   6(6)   7(7)   8(8)   9(9)   0(10)  -(11)  =(12)  BACKSPACE(13)
 # TAB(27)   Q(26)  W(25)  E(24)  R(23)  T(22)  Y(21)  U(20)  I(19)  O(18)  P(17)  [(16)  ](15)   \(14)
