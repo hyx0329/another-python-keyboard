@@ -35,7 +35,7 @@ class Keyboard:
 
 	def initialize(self):
 		# check then setup basics
-		logger.debug("Initialize the hardware and hid_manager")
+		logger.debug("Initializing the hardware and hid_manager")
 		self._check_hardware_api(self.hardware)
 		params = self._generate_hid_manager_parameters(self.hardware.hardware_spec)
 		self.hid_manager = HIDDeviceManager(*params)

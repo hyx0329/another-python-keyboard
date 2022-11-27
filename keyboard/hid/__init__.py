@@ -10,6 +10,7 @@ import time
 import microcontroller
 import adafruit_logging as logging
 logger = logging.getLogger("HID Manager")
+logger.setLevel(logging.DEBUG)
 
 # USB interface
 import usb_hid
@@ -150,10 +151,13 @@ class HIDDeviceManager:
 
 	def _auto_select_device(self):
 		if self._interfaces.get("usb", None) and is_usb_connected():
+			logger.debug("Auto select interface: USB")
 			return self._interfaces.get("usb")
 		elif self._interfaces.get("ble", None):
+			logger.debug("Auto select interface: BLE")
 			return self._interfaces.get("ble")
 		elif self._interfaces.get("usb", None):
+			logger.debug("Auto select interface: USB")
 			return self._interfaces.get("usb")
 		raise RuntimeError("No valid interface!")
 	
@@ -207,12 +211,14 @@ class HIDDeviceManager:
 	async def switch_to_usb(self):
 		interface = self._interfaces.get("usb", None)
 		if interface:
+			logger.info("Switching to USB")
 			await self._release_all()
 			self.current_interface = interface
 
 	async def switch_to_ble(self):
 		interface = self._interfaces.get("ble", None)
 		if interface:
+			logger.info("Switching to BLE(%d)" % self._ble_id)
 			await self._release_all()
 			if not self.ble_is_connected:
 				self.ble_advertisement_start(timeout = 60)
