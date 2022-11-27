@@ -494,12 +494,13 @@ OP_TAP_TOGGLE = 0xF0
 
 
 # convert keyname to action code
+# for keymap compiling
 def get_action_code(x):
-	if type(x) is int:
+	if isinstance(x, int):
 		return x if x > 9 else ASCII_TO_KEYCODE[ord(str(x))]
-	if type(x) is str and len(x) == 1:
+	elif isinstance(x, str) and len(x) == 1:
 		return ASCII_TO_KEYCODE[ord(x)] & 0x7F
-	if x is None:
+	elif x is None:
 		return 0
 	raise ValueError('Invalid keyname {}'.format(x))
 

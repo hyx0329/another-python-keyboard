@@ -49,8 +49,10 @@ class Matrix:
 				for col in cols:
 					key_index += 1
 					# TODO: make parameter variable
+					# here, 2 bit to filter the noise(python scan is a little slow)
+					# if use C, can be made longer
 					if col.value == pressed:
-						key_val[key_index] = ((key_val[key_index] << 1) | 1) & 0xF
+						key_val[key_index] = ((key_val[key_index] << 1) | 1) & 0x3
 					else:
 						key_val[key_index] >>= 1
 				row.value = not pressed
@@ -63,8 +65,9 @@ class Matrix:
 		# key up/down events are not generated here
 		key_val = self.key_val
 		mask = self.mask
-		enable_thresh = 0x7
-		disable_thresh = 0x2
+		# the thresh should match the noise filter bit length
+		enable_thresh = 0x1
+		disable_thresh = 0x1
 		
 		# check changes
 		for key_index in range(self.key_count):

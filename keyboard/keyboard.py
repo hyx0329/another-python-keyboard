@@ -75,7 +75,6 @@ class Keyboard:
 		self._hardware_module = hardware_module
 		self.hardware = hardware_module.KeyboardHardware()
 		self.key_name = hardware_module.key_name
-		self.COORDS = hardware_module.COORDS
 
 	def register_keymap(self, keymap):
 		self._keymap = keymap
@@ -98,7 +97,6 @@ class Keyboard:
 
 	def _get_action_code(self, position):
 		# the actual action code varies because of layer support
-		position = self.COORDS[position]
 		layer_mask = self._layer_mask
 		for layer in range(len(self._actionmap) - 1, -1, -1):
 			if (layer_mask >> layer) & 1:
@@ -175,6 +173,7 @@ class Keyboard:
 				continue
 
 			for event in input_hardware:
+				# the key_id is the relative ID in the keymap
 				key_id = event & 0x7F
 				press = (event & 0x80) == 0
 				if press:

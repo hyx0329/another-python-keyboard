@@ -90,19 +90,21 @@ class KeyboardHardware:
 		# generate key events and return events count
 		# BTW for masks: 0 means inactive(released up), 1 means active(pressed down)
 		# for events, set 0x80 if key becomes inactive 
+		# here we convert the raw ID to the relative position in the Keymap
+		# note the key ID should not exceed 0x7F(127), which should be sufficient
 		old_mask = self._key_mask
-		new_mask = await self._matrix.get_raw_keys()
+		new_mask = await self.get_raw_keys()
 		self._key_mask = new_mask
-		for i in range(self._key_count):
-			imask = 1 << i
+		for raw_key_id in range(self._key_count):
+			imask = 1 << raw_key_id
 			old_status = old_mask & imask
 			new_status = new_mask & imask
 			up = old_status > new_status
 			down = old_status < new_status
 			if up: # released
-				self._put( 0x80 | i )
+				self._put( 0x80 | COORDS[raw_key_id] )
 			elif down: # pressed
-				self._put( i )
+				self._put( COORDS[raw_key_id] )
 			# otherwise no change
 		return self.__len__()
 
