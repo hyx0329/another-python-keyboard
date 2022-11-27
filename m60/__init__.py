@@ -28,7 +28,9 @@ KEY_NAME =  (
 
 
 def key_name(key):
-	return KEY_NAME[COORDS[key]]
+	# `key` is the relative id on the keymap
+	# not the actual physical id
+	return KEY_NAME[key]
 
 
 class KeyboardHardware:
