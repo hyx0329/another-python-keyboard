@@ -187,6 +187,7 @@ class Keyboard:
 					action_code = self._get_action_code(key_id)
 					keys_last_action_code[key_id] = action_code
 					key_variant = action_code >> 12
+
 					if action_code < 0xFF:
 						await hid_manager.keyboard_press(action_code)
 					elif key_variant < ACT_MODS_TAP:
@@ -223,6 +224,7 @@ class Keyboard:
 					keys_up_time[key_id] = trigger_time
 					action_code = keys_last_action_code[key_id]
 					key_variant = action_code >> 12
+
 					if action_code < 0xFF:
 						await hid_manager.keyboard_release(action_code)
 					elif key_variant < ACT_MODS_TAP:

@@ -76,8 +76,15 @@ class KeyboardHardware:
 	def __len__(self):
 		return self._key_events_length
 
-	def __getitem__(self):
-		return self._get()
+	def __getitem__(self, key):
+		if 0 <= key < self._key_events_length:
+			index = (self._key_events_head + key) % self._key_count
+			return self._key_events[index]
+		elif key < 0 and abs(key) <= self._key_events_length:
+			index = (self._key_events_tail + key) % self._key_count
+			return self._key_events[index]
+		else:
+			raise IndexError
 
 	def __iter__(self):
 		return self
