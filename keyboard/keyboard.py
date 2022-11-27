@@ -31,8 +31,10 @@ class Keyboard:
 		self._layer_mask = 1
 		self._macro_handler = do_nothing
 		self._pair_handler = do_nothing
+		self._coroutine_main = None
 		self._coroutine_scan = None
 		self._coroutine_secondary = None
+		self._coroutine_hardware_secondary = None
 
 	def initialize(self):
 		# check then setup basics
@@ -42,33 +44,28 @@ class Keyboard:
 		enable_ble = self.hardware_spec & HAS_BLE != 0
 		ble_battery = self.hardware_spec & HAS_BATTERY != 0
 		self.hid_manager = HIDDeviceManager(enable_ble=enable_ble, ble_battery=ble_battery)
+		self._coroutine_main = self.routine
 		self._coroutine_scan = self.hardware.scan_routine
 		if self.hardware.has_secondary_routine:
-			self._coroutine_secondary = self.hardware.secondary_routine
+			self._coroutine_hardware_secondary = self.hardware.secondary_routine
 		else:
-			self._coroutine_secondary = None
+			self._coroutine_hardware_secondary = None
 
 	def run(self):
 		self.initialize()
 		asyncio.run(self._run())
 
 	async def _run(self):
-		task_main = asyncio.create_task(self.routine())
-		task_scan = asyncio.create_task(self._coroutine_scan())
-		await asyncio.gather(task_main, task_scan)
+		await asyncio.gather(*self.get_all_tasks())
 
-	def get_all_entry_points(self):
-		entries = list()
-		entries.append(self.routine)
-		entries.append(self._coroutine_scan)
-		if callable(self._coroutine_secondary):
-			entries.append(self.hardware.secondary_routine)
-		return entries
-
-	def get_all_coroutines(self):
+	def get_all_tasks(self):
 		tasks = list()
-		for entry in self.get_all_coroutines():
-			tasks.append(asyncio.create_task(entry()))
+		tasks.append(asyncio.create_task(self._coroutine_main()))
+		tasks.append(asyncio.create_task(self._coroutine_scan()))
+		if callable(self._coroutine_secondary):
+			tasks.append(asyncio.create_task(self._coroutine_secondary()))
+		if callable(self._coroutine_hardware_secondary):
+			tasks.append(asyncio.create_task(self._coroutine_hardware_secondary()))
 		return tasks
 
 	def register_hardware(self, hardware_module):
