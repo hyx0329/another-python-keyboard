@@ -1,6 +1,7 @@
 # -*- encoding: utf-8 -*-
 # vim: ts=4 noexpandtab
 
+import time
 import array
 import struct
 import asyncio
@@ -173,6 +174,8 @@ class Keyboard:
 			# only log if non-zero to tidy up
 			logger.debug("Key events count: %d" % event_count)
 
+			trigger_time = time.monotonic_ns() // 1000000 & 0x7FFFFFFF
+
 			for event in input_hardware:
 				# the key_id is the relative ID in the keymap
 				key_id = event & 0x7F
@@ -180,6 +183,7 @@ class Keyboard:
 				logger.debug("Processing key event: %d | %d" % (key_id, press))
 
 				if press:
+					keys_down_time[key_id] = trigger_time
 					action_code = self._get_action_code(key_id)
 					keys_last_action_code[key_id] = action_code
 					key_variant = action_code >> 12
@@ -216,6 +220,7 @@ class Keyboard:
 						))
 
 				else: # release
+					keys_up_time[key_id] = trigger_time
 					action_code = keys_last_action_code[key_id]
 					key_variant = action_code >> 12
 					if action_code < 0xFF:
@@ -240,8 +245,9 @@ class Keyboard:
 
 					# if required, log here
 					logger.info(
-							"Got {} {:10} / {}".format(
-							key_id, self.hardware.key_name(key_id), hex(action_code)
+							"Got {} {:10} / {}, {}ms".format(
+							key_id, self.hardware.key_name(key_id), hex(action_code),
+							keys_up_time[key_id] - keys_down_time[key_id],
 						))
 
 		if mouse_action != 0:
