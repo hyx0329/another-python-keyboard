@@ -157,61 +157,25 @@ class Keyboard:
 			elif op == OP_BIT_XOR:
 				self._layer_mask ^= mask
 	
-	def _handle_action_layertap_press(self, action_code, is_tapping_key = True):
-		pass
+	#def _handle_action_layertap_press(self, action_code, is_tapping_key = True):
+	#	pass
 
-	def _handle_action_layertap_release(self, action_code, is_tapping_key = True):
-		pass
+	#def _handle_action_layertap_release(self, action_code, is_tapping_key = True):
+	#	pass
 
-	# hold: 12~8: 5bits, modifiers only
-	# tap: 7~0: 8bit, anykey
-	# this function access the input_hardware and hid_interface directly
-	# WARN: about tap key, actually there's a minor bug
-	def _check_action_tapkey_timelimit(self, trigger_time):
-		logger.debug("Checking tapkey's time limit")
-		raise RuntimeError
-		if self._tap_key_not_triggered:
-			key_id = self._tap_key_last_one
-			down_time = self.keys_down_time[key_id]
-			duration = trigger_time - down_time
-			logger.debug("TAP duration: %d" % duration)
-			if duration > self._tap_thresh: # hold time long enough
-				# trigger the hold action(modifiers)
-				logger.debug("TAP key triggered as HOLD due to timeout")
-				modifiers = (self.keys_last_action_code[key_id] >> 8) & 0x1F
-				keycodes = mods_to_keycodes(modifiers)
-				await self.hid_manager.keyboard_press(*keycodes)
-				self._tap_key_not_triggered = False
+	#def _check_action_tapkey_timelimit(self, trigger_time):
+	#	pass
 
-	def _trigger_action_tapkey_hold(self):
-		# blindly trigger the tapkey's `hold` action
-		if self._tap_key_not_triggered:
-			logger.debug("TAP key triggered as HOLD due to another press event")
-			key_id = self._tap_key_last_one
-			action_code = (self.keys_last_action_code[key_id] >> 8) & 0x1f
-			keycodes = mods_to_keycodes(action_code)
-			self.keys_last_action_code[keys_id] = action_code
-			await self.hid_manager.keyboard_press(action_code)
-			self._tap_key_not_triggered = False
+	#def _trigger_action_tapkey_hold(self):
+	#	# blindly trigger the tapkey's `hold` action
+	#	pass
 
-	def _handle_action_modstap_press(self, action_code, key_id, trigger_time):
-		# not triggered here
-		logger.debug("TAP key %s wait to be triggered" % key_id)
-		self._tap_key_last_one = key_id
-		self._tap_key_not_triggered = True
+	#def _handle_action_modstap_press(self, action_code, key_id, trigger_time):
+	#	# not triggered here
+	#	pass
 
 	def _handle_action_modstap_release(self, action_code, key_id, trigger_time):
-		modifiers = ( action_code >> 8 ) & 0x1F
-		keycodes = mods_to_keycodes(modifiers)
-		single_key = action_code & 0xFF
-		if self._tap_key_not_triggered:
-			# press it then release it
-			await self.hid_manager.keyboard_press(single_key)
-			await self.hid_manager.keyboard_release(single_key)
-			self._tap_key_not_triggered = False
-		else:
-			# release it
-			await self.hid_manager.keyboard_release(*keycodes)
+		pass
 
 	async def _main_routine(self):
 		keys_last_action_code = self.keys_last_action_code
@@ -241,7 +205,25 @@ class Keyboard:
 			
 
 			# check tapkey before any action
-			self._check_action_tapkey_timelimit(trigger_time)
+			# hold: 12~8: 5bits, modifiers only
+			# tap: 7~0: 8bit, anykey
+			# this function access the input_hardware and hid_interface directly
+			# WARN: about tap key, actually there's a minor bug
+			if self._tap_key_not_triggered:
+				#self._check_action_tapkey_timelimit(trigger_time)
+				logger.debug("Checking tapkey's time limit")
+				key_id = self._tap_key_last_one
+				down_time = self.keys_down_time[key_id]
+				duration = trigger_time - down_time
+				logger.debug("TAP duration: %d" % duration)
+				if duration > self._tap_thresh: # hold time long enough
+					# trigger the hold action(modifiers)
+					logger.debug("TAP key triggered as HOLD due to timeout")
+					modifiers = (self.keys_last_action_code[key_id] >> 8) & 0x1F
+					keycodes = mods_to_keycodes(modifiers)
+					await self.hid_manager.keyboard_press(*keycodes)
+					self._tap_key_not_triggered = False
+		
 
 			# process events
 			# Note: iter the input_hardware will also consume the events
@@ -258,7 +240,14 @@ class Keyboard:
 					key_variant = action_code >> 12
 					
 					# trigger tapkey `hold` action when key down events detected
-					self._trigger_action_tapkey_hold()
+					if self._tap_key_not_triggered:
+						logger.debug("TAP key triggered as HOLD due to another press event")
+						key_id = self._tap_key_last_one
+						action_code = (self.keys_last_action_code[key_id] >> 8) & 0x1f
+						keycodes = mods_to_keycodes(action_code)
+						self.keys_last_action_code[keys_id] = action_code
+						await self.hid_manager.keyboard_press(action_code)
+						self._tap_key_not_triggered = False
 
 					if action_code < 0xFF:
 						await hid_manager.keyboard_press(action_code)
@@ -278,7 +267,9 @@ class Keyboard:
 							await hid_manager.keyboard_press(keycode)
 						else:
 							# handle it the other way, with a state
-							self._handle_action_modstap_press(action_code, key_id, trigger_time)
+							logger.debug("TAP key %s wait to be triggered" % key_id)
+							self._tap_key_last_one = key_id
+							self._tap_key_not_triggered = True
 					elif key_variant == ACT_USAGE:
 						# Consumer control, media keys
 						if action_code & 0x400 > 0:
@@ -315,7 +306,18 @@ class Keyboard:
 						await hid_manager.keyboard_release(*keycodes)
 					elif key_variant < ACT_USAGE:
 						# MODS_TAP
-						self._handle_action_modstap_release(action_code, key_id, trigger_time)
+						#self._handle_action_modstap_release(action_code, key_id, trigger_time)
+						modifiers = ( action_code >> 8 ) & 0x1F
+						keycodes = mods_to_keycodes(modifiers)
+						single_key = action_code & 0xFF
+						if self._tap_key_not_triggered:
+							# press it then release it
+							await self.hid_manager.keyboard_press(single_key)
+							await self.hid_manager.keyboard_release(single_key)
+							self._tap_key_not_triggered = False
+						else:
+							# release it
+							await self.hid_manager.keyboard_release(*keycodes)
 					elif key_variant == ACT_USAGE:
 						if action_code & 0x400 > 0:
 							await hid_manager.consumer_control_release(0)
