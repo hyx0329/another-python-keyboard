@@ -32,7 +32,14 @@ def key_name(key):
 
 
 class KeyboardHardware:
-	# minimum APIs
+	# minimum APIs:
+	#  get_all_tasks()
+	#  get_keys()
+	#  iterator
+	#  len()
+	#  hardware_spec
+	#  key_name(can be dummy)
+
 	def __init__(self):
 		self._matrix = Matrix()
 		self._key_mask = 0
@@ -42,8 +49,8 @@ class KeyboardHardware:
 		self._key_events_head = 0
 		self._key_events_tail = 0
 		self._battery_update_callback = lambda x: None
-		# override the scan_routine
-		self.scan_routine = self._matrix.scan_routine
+		self.key_name = key_name
+		# for ease of use, but don't call in parent modules
 		self.get_raw_keys = self._matrix.get_raw_keys
 	
 	def _put(self, value):
@@ -74,17 +81,14 @@ class KeyboardHardware:
 	def __iter__(self):
 		return self
 
-	async def scan_routine(self):
-		# scan keys
-		# This is a place holder
-		while True:
-			await asyncio.sleep(0)
+	def get_all_tasks(self):
+		# return a list of tasks
+		tasks = list()
+		tasks.append(asyncio.create_task(self._matrix.scan_routine()))
+		return tasks
 
-	async def secondary_routine(self):
-		# other stuff: led, battery, whatever
-		while True:
-			# led.refresh()
-			await asyncio.sleep(0)
+	async def _led_routine(self):
+		raise NotImplemented
 
 	async def get_keys(self):
 		# generate key events and return events count
@@ -107,10 +111,6 @@ class KeyboardHardware:
 				self._put( COORDS[raw_key_id] )
 			# otherwise no change
 		return self.__len__()
-
-	@property
-	def has_secondary_routine(self):
-		return False
 
 	@property
 	def hardware_spec(self):

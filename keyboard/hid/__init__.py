@@ -114,6 +114,11 @@ class HIDDeviceManager:
 			self.__initialize_ble_interface(battery = use_battry_service)
 		self.current_interface = self._auto_select_device()
 	
+	def get_all_tasks(self):
+		# return all just created coroutines/tasks
+		tasks = list()
+		return tasks
+
 	def initialize_usb_interface(self):
 		# NOTE: the USB interfaces can only be changed at boot time(boot.py)
 		self._hid_usb = HIDInterfaceWrapper(usb_hid.devices)

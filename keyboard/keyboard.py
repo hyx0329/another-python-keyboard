@@ -29,23 +29,13 @@ class Keyboard:
 		self._layer_mask = 1
 		self._macro_handler = do_nothing
 		self._pair_handler = do_nothing
-		self._coroutine_main = None
-		self._coroutine_scan = None
-		self._coroutine_secondary = None
-		self._coroutine_hardware_secondary = None
 
 	def initialize(self):
 		# check then setup basics
-		assert hasattr(self.hardware, "scan_routine")
+		assert hasattr(self.hardware, "get_all_tasks")
 		assert hasattr(self.hardware, "get_keys")
 		params = self._generate_hid_manager_parameters(self.hardware.hardware_spec)
 		self.hid_manager = HIDDeviceManager(*params)
-		self._coroutine_main = self.main_routine
-		self._coroutine_scan = self.hardware.scan_routine
-		if self.hardware.has_secondary_routine:
-			self._coroutine_hardware_secondary = self.hardware.secondary_routine
-		else:
-			self._coroutine_hardware_secondary = None
 	
 	def _generate_hid_manager_parameters(self, hardware_spec):
 		params = dict()
@@ -58,22 +48,23 @@ class Keyboard:
 		asyncio.run(self._run())
 
 	async def _run(self):
-		await asyncio.gather(*self.get_all_tasks())
+		own_tasks = self.get_all_tasks()
+		hid_tasks = self.hid_manager.get_all_tasks()
+		hardware_tasks = self.hardware.get_all_tasks()
+		tasks = own_tasks + hid_tasks + hardware_tasks
+		# print("running %d tasks" % len(tasks))
+		await asyncio.gather(*tasks)
 
 	def get_all_tasks(self):
+		# return a list of own tasks
+		# do not include submodule tasks
 		tasks = list()
-		tasks.append(asyncio.create_task(self._coroutine_main()))
-		tasks.append(asyncio.create_task(self._coroutine_scan()))
-		if callable(self._coroutine_secondary):
-			tasks.append(asyncio.create_task(self._coroutine_secondary()))
-		if callable(self._coroutine_hardware_secondary):
-			tasks.append(asyncio.create_task(self._coroutine_hardware_secondary()))
+		tasks.append(asyncio.create_task(self._main_routine()))
 		return tasks
 
 	def register_hardware(self, hardware_module):
 		self._hardware_module = hardware_module
 		self.hardware = hardware_module.KeyboardHardware()
-		self.key_name = hardware_module.key_name
 
 	def register_keymap(self, keymap):
 		self._keymap = keymap
@@ -152,7 +143,7 @@ class Keyboard:
 	def _handle_action_layertap_release(self, action_code, is_tapping_key = True):
 		pass
 
-	async def main_routine(self):
+	async def _main_routine(self):
 		keys_last_action_code = [0] * self.hardware._key_count
 		keys_down_time = [0] * self.hardware._key_count
 		keys_up_time = [0] * self.hardware._key_count
@@ -209,7 +200,7 @@ class Keyboard:
 					# if required, log here
 					print(
 						"{} {} \\ {}".format(
-							key_id, self.key_name(key_id), hex(action_code)
+							key_id, self.hardware.key_name(key_id), hex(action_code)
 						)
 					)
 
@@ -239,7 +230,7 @@ class Keyboard:
 					# if required, log here
 					print(
 						"{} {} / {}".format(
-							key_id, self.key_name(key_id), hex(action_code)
+							key_id, self.hardware.key_name(key_id), hex(action_code)
 						)
 					)
 
