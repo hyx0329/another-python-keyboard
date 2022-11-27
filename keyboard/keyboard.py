@@ -9,9 +9,7 @@ from .utils import do_nothing
 # TODO: explict import
 from .action_code import *
 from .hid import HIDDeviceManager
-
-HAS_BLE = 0b01
-HAS_BATTERY = 0b10
+import keyboard.hardware_spec_ids as hwspecs
 
 class Keyboard:
 	# TODO: add pair key
@@ -40,16 +38,20 @@ class Keyboard:
 		# check then setup basics
 		assert hasattr(self.hardware, "scan_routine")
 		assert hasattr(self.hardware, "get_keys")
-		self.hardware_spec = self.hardware.hardware_spec
-		enable_ble = self.hardware_spec & HAS_BLE != 0
-		ble_battery = self.hardware_spec & HAS_BATTERY != 0
-		self.hid_manager = HIDDeviceManager(enable_ble=enable_ble, ble_battery=ble_battery)
-		self._coroutine_main = self.routine
+		params = self._generate_hid_manager_parameters(self.hardware.hardware_spec)
+		self.hid_manager = HIDDeviceManager(*params)
+		self._coroutine_main = self.main_routine
 		self._coroutine_scan = self.hardware.scan_routine
 		if self.hardware.has_secondary_routine:
 			self._coroutine_hardware_secondary = self.hardware.secondary_routine
 		else:
 			self._coroutine_hardware_secondary = None
+	
+	def _generate_hid_manager_parameters(self, hardware_spec):
+		params = dict()
+		params["enable_ble"] = hardware_spec & hwspecs.HAS_BLE != 0
+		params["ble_battery"] = hardware_spec & hwspecs.HAS_BATTERY != 0
+		return params
 
 	def run(self):
 		self.initialize()
@@ -150,7 +152,7 @@ class Keyboard:
 	def _handle_action_layertap_release(self, action_code, is_tapping_key = True):
 		pass
 
-	async def routine(self):
+	async def main_routine(self):
 		keys_last_action_code = [0] * self.hardware._key_count
 		keys_down_time = [0] * self.hardware._key_count
 		keys_up_time = [0] * self.hardware._key_count
