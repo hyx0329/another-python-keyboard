@@ -116,10 +116,10 @@ class Keyboard:
 				return code
 		return 0
 
-	def _handle_action_command(self, action_code):
+	async def _handle_action_command(self, action_code):
 		pass
 
-	def _handle_action_macro(self, action_code):
+	async def _handle_action_macro(self, action_code):
 		pass
 
 	async def _handle_action_layer_press(self, action_code):
@@ -195,11 +195,8 @@ class Keyboard:
 			# TODO: here add pair key detection
 			
 			# check tapkey before any action
-			# because awaitables are not awaitable outside the corotines
-			# have to NOT write as a function
 			# hold: 12~8: 5bits, modifiers or layer
 			# tap: 7~0: 8bit, anykey
-			# WARN: about tap key, actually there's a minor bug
 			if tap_key_variant > 0:
 				duration = trigger_time - keys_down_time[tap_key_last_id]
 				if duration > tap_thresh: # hold time long enough
@@ -218,20 +215,24 @@ class Keyboard:
 
 				if press:
 					keys_down_time[key_id] = trigger_time
-					action_code = self._get_action_code(key_id)
-					keys_last_action_code[key_id] = action_code
-					key_variant = action_code >> 12
 
-					logger.info(
-							"Key {} {:10} \\ {:0>4b} {}".format(
-							key_id, self.hardware.key_name(key_id), key_variant, hex(action_code)
-						))
-					
 					# trigger tapkey `hold` action when key down events detected
+					# This will alter self._layer_mask thus affect action_code
 					if tap_key_variant > 0:
 						logger.debug("TAP/L/hold/newpress")
 						await self._trigger_tapkey_action_hold(tap_key_last_id, tap_key_variant)
 						tap_key_variant = 0
+
+					# get action
+					action_code = self._get_action_code(key_id)
+					keys_last_action_code[key_id] = action_code
+					key_variant = action_code >> 12
+
+					# log info
+					logger.info(
+							"Key {} {:10} \\ {:0>4b} {}".format(
+							key_id, self.hardware.key_name(key_id), key_variant, hex(action_code)
+						))
 
 					# start parsing key info
 					if action_code < 0xFF:
@@ -281,11 +282,11 @@ class Keyboard:
 							tap_key_last_id = key_id
 							tap_key_variant = key_variant
 					elif key_variant == ACT_MACRO:
-						self._handle_action_macro(action_code)
+						await self._handle_action_macro(action_code)
 					elif key_variant == ACT_BACKLIGHT:
 						pass
 					elif key_variant == ACT_COMMAND:
-						self._handle_action_command(action_code)
+						await self._handle_action_command(action_code)
 					
 				else: # release
 					keys_up_time[key_id] = trigger_time
@@ -339,7 +340,7 @@ class Keyboard:
 								await hid_manager.keyboard_press(keycode)
 								await hid_manager.keyboard_release(keycode)
 							tap_key_variant = 0
-						else: # hold state
+						else: # is `hold`
 							if keycode & 0xE0 == 0xC0:
 								logger.debug("LAYER_MODS")
 								keycodes = mods_to_keycodes(keycode & 0x1F)
