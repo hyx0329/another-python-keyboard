@@ -88,6 +88,7 @@ class Keyboard:
 	def register_keymap(self, keymap):
 		self._keymap = keymap
 		self._compile_keymap()
+		# TODO: release all
 
 	def _compile_keymap(self):
 		convert = lambda a: array.array("H", (get_action_code(k) for k in a))
@@ -121,7 +122,7 @@ class Keyboard:
 	def _handle_action_macro(self, action_code):
 		pass
 
-	def _handle_action_layer_press(self, action_code):
+	async def _handle_action_layer_press(self, action_code):
 		# op<<10|on<<8|part<<5|(bits&0x1f)
 		on = (action_code >> 8) & 0x3
 		if on == ON_PRESS or on == ON_BOTH:
@@ -138,7 +139,7 @@ class Keyboard:
 			elif op == OP_BIT_XOR:
 				self._layer_mask ^= mask
 
-	def _handle_action_layer_release(self, action_code):
+	async def _handle_action_layer_release(self, action_code):
 		# op<<10|on<<8|part<<5|(bits&0x1f)
 		on = (action_code >> 8) & 0x3
 		if on == ON_RELEASE:
@@ -155,6 +156,15 @@ class Keyboard:
 			elif op == OP_BIT_XOR:
 				self._layer_mask ^= mask
 	
+	async def _trigger_tapkey_action_hold(self, key_id, key_variant):
+		action_code = self.keys_last_action_code[key_id]
+		param = (action_code >> 8) & 0x1F
+		if key_variant == ACT_MODS_TAP:
+			keycodes = mods_to_keycodes(param)
+			await self.hid_manager.keyboard_press(*keycodes)
+		elif key_variant == ACT_LAYER_TAP or tap_key_variant == ACT_LAYER_TAP_EXT:
+			self._layer_mask |= 1 << param
+
 	async def _main_routine(self):
 		# there's some circuitpython limit that prevents too many long function calls
 		# so I have to write everything in one loop
@@ -168,11 +178,11 @@ class Keyboard:
 		# to identify tap keys, need to process separately
 		# Store tap keys before triggering them
 		# Trigger them before new key's arrival
-		# Since every tap key is triggered before any new key's processed,
+		# Since every tap key is triggered before any new key's down event processed,
 		# there will be only one tap key to process
 		tap_thresh = self._tap_thresh
-		tap_key_last_one = 0
-		tap_key_variant = 0
+		tap_key_last_id = 0
+		tap_key_variant = 0 # also a marker whether tapkey is processed
 
 		# report loop
 		while True:
@@ -185,21 +195,16 @@ class Keyboard:
 			# TODO: here add pair key detection
 			
 			# check tapkey before any action
-			# hold: 12~8: 5bits, modifiers only
+			# because awaitables are not awaitable outside the corotines
+			# have to NOT write as a function
+			# hold: 12~8: 5bits, modifiers or layer
 			# tap: 7~0: 8bit, anykey
-			# this function access the input_hardware and hid_interface directly
 			# WARN: about tap key, actually there's a minor bug
 			if tap_key_variant > 0:
-				duration = trigger_time - keys_down_time[tap_key_last_one]
+				duration = trigger_time - keys_down_time[tap_key_last_id]
 				if duration > tap_thresh: # hold time long enough
 					logger.debug("TAP/L/hold/timeout")
-					action_code_tap = keys_last_action_code[tap_key_last_one]
-					param = (action_code_tap >> 8) & 0x1F
-					if tap_key_variant == ACT_MODS_TAP:
-						keycodes = mods_to_keycodes(param)
-						await hid_manager.keyboard_press(*keycodes)
-					elif tap_key_variant == ACT_LAYER_TAP or tap_key_variant == ACT_LAYER_TAP_EXT:
-						self._layer_mask |= 1 << param
+					await self._trigger_tapkey_action_hold(tap_key_last_id, tap_key_variant)
 					tap_key_variant = 0
 
 
@@ -218,21 +223,14 @@ class Keyboard:
 					key_variant = action_code >> 12
 
 					logger.info(
-							"Got {} {:10} \\ {:0>4b} {}".format(
+							"Key {} {:10} \\ {:0>4b} {}".format(
 							key_id, self.hardware.key_name(key_id), key_variant, hex(action_code)
 						))
 					
 					# trigger tapkey `hold` action when key down events detected
-					# I know code dulplicating but circuitpython has its limit
 					if tap_key_variant > 0:
 						logger.debug("TAP/L/hold/newpress")
-						action_code_tap = keys_last_action_code[tap_key_last_one]
-						param = (action_code_tap >> 8) & 0x1F
-						if tap_key_variant == ACT_MODS_TAP:
-							keycodes = mods_to_keycodes(param)
-							await hid_manager.keyboard_press(*keycodes)
-						elif tap_key_variant == ACT_LAYER_TAP or tap_key_variant == ACT_LAYER_TAP_EXT:
-							self._layer_mask |= 1 << param
+						await self._trigger_tapkey_action_hold(tap_key_last_id, tap_key_variant)
 						tap_key_variant = 0
 
 					# start parsing key info
@@ -256,7 +254,7 @@ class Keyboard:
 						else:
 							# handle it the other way, with a state
 							logger.debug("TAP/wait/%d" % key_id)
-							tap_key_last_one = key_id
+							tap_key_last_id = key_id
 							tap_key_variant = key_variant
 					elif key_variant == ACT_USAGE:
 						# Consumer control, media keys
@@ -265,7 +263,7 @@ class Keyboard:
 					elif key_variant == ACT_MOUSEKEY:
 						pass
 					elif key_variant == ACT_LAYER:
-						self._handle_action_layer_press(action_code)
+						await self._handle_action_layer_press(action_code)
 					elif key_variant == ACT_LAYER_TAP or key_variant == ACT_LAYER_TAP_EXT:
 						if action_code & 0xE0 == 0xC0: # press modifiers and switch layer
 							logger.debug("LAYER_MODS")
@@ -280,7 +278,7 @@ class Keyboard:
 							await hid_manager.keyboard_press(keycode)
 						else:
 							logger.debug("TAP-L/wait/%d" % key_id)
-							tap_key_last_one = key_id
+							tap_key_last_id = key_id
 							tap_key_variant = key_variant
 					elif key_variant == ACT_MACRO:
 						self._handle_action_macro(action_code)
@@ -295,7 +293,7 @@ class Keyboard:
 					key_variant = action_code >> 12
 
 					logger.info(
-							"Got {} {:10} / {:0>4b} {}, {}ms".format(
+							"Key {} {:10} / {:0>4b} {}, {}ms".format(
 							key_id, self.hardware.key_name(key_id), key_variant, hex(action_code),
 							keys_up_time[key_id] - keys_down_time[key_id],
 						))
@@ -310,7 +308,7 @@ class Keyboard:
 						await hid_manager.keyboard_release(*keycodes)
 					elif key_variant < ACT_USAGE:
 						# MODS_TAP
-						if tap_key_variant == key_variant and tap_key_last_one == key_id: # not triggered, same id
+						if key_variant == tap_key_variant and key_id == tap_key_last_id: # not triggered, same id
 							# press it then release it
 							logger.debug("TAP/tap/tap")
 							single_key = action_code & 0xFF
@@ -326,12 +324,12 @@ class Keyboard:
 					elif key_variant == ACT_MOUSEKEY:
 						pass
 					elif key_variant == ACT_LAYER:
-						self._handle_action_layer_release(action_code)
+						await self._handle_action_layer_release(action_code)
 					elif key_variant == ACT_LAYER_TAP or key_variant == ACT_LAYER_TAP_EXT:
 						keycode = action_code & 0xFF
 						param = (action_code >> 8) & 0x1F
 						layer_mask = 1 << param
-						if tap_key_last_one == key_id and tap_key_variant == key_variant:
+						if  key_id == tap_key_last_id and key_variant == tap_key_variant:
 							# not triggered, is	tapping key
 							logger.debug("TAP-L/tap/tap")
 							if keycode == OP_TAP_TOGGLE:
