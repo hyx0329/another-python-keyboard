@@ -45,15 +45,17 @@ class Keyboard:
 		params = self._generate_hid_manager_parameters(self.hardware.hardware_spec)
 		self.hid_manager = HIDDeviceManager(*params)
 		# initialize shared memory
-		self.keys_last_action_code = [0] * self.hardware._key_count
-		self.keys_down_time = [0] * self.hardware._key_count
-		self.keys_up_time = [0] * self.hardware._key_count
+		logger.debug("Key count: %d" % self.hardware.key_count)
+		self.keys_last_action_code = [0] * self.hardware.key_count
+		self.keys_down_time = [0] * self.hardware.key_count
+		self.keys_up_time = [0] * self.hardware.key_count
 	
 	def _check_hardware_api(self, hardware):
 		assert hasattr(self.hardware, "get_all_tasks")
 		assert hasattr(self.hardware, "get_keys")
 		assert hasattr(self.hardware, "hardware_spec")
 		assert hasattr(self.hardware, "key_name")
+		assert hasattr(self.hardware, "key_count")
 		iter(self.hardware)  # hardware should be iterable ( to get key events )
 	
 	def _generate_hid_manager_parameters(self, hardware_spec):
@@ -159,10 +161,10 @@ class Keyboard:
 	async def _trigger_tapkey_action_hold(self, key_id, key_variant):
 		action_code = self.keys_last_action_code[key_id]
 		param = (action_code >> 8) & 0x1F
-		if key_variant == ACT_MODS_TAP:
+		if key_variant < ACT_USAGE: # MODS_TAP
 			keycodes = mods_to_keycodes(param)
 			await self.hid_manager.keyboard_press(*keycodes)
-		elif key_variant == ACT_LAYER_TAP or tap_key_variant == ACT_LAYER_TAP_EXT:
+		elif key_variant == ACT_LAYER_TAP or key_variant == ACT_LAYER_TAP_EXT:
 			self._layer_mask |= 1 << param
 
 	async def _main_routine(self):
