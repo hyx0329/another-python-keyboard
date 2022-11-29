@@ -126,6 +126,10 @@ class KeyboardHardware:
 		# with battery: 0b11
 		return 0b11
 
+	@property
+	def key_count(self):
+		return self._key_count
+
 	async def get_battery_level(self):
 		return battery_level()
 
