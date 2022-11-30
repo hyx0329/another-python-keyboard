@@ -20,11 +20,12 @@ class Keyboard:
 	# TODO: add pair key
 	# TODO: add macro
 	
-	def __init__(self):
+	def __init__(self, *args, nkro_usb = False, **kwargs):
 		self.hardware = None
 		self._hardware_module = None
 		self.hardware_spec = 0
 		self.hid_manager = None
+		self.nkro_usb = nkro_usb
 		self._keymap = None
 		self._profiles = {}  # profile auto switching is not supported yet
 		self._pairs = ()
@@ -44,7 +45,7 @@ class Keyboard:
 		logger.debug("Initializing the hardware and hid_manager")
 		self._check_hardware_api(self.hardware)
 		params = self._generate_hid_manager_parameters(self.hardware.hardware_spec)
-		self.hid_manager = HIDDeviceManager(*params)
+		self.hid_manager = HIDDeviceManager(nkro_usb = self.nkro_usb, *params)
 		# initialize shared memory
 		logger.debug("Key count: %d" % self.hardware.key_count)
 		self.keys_last_action_code = [0] * self.hardware.key_count
