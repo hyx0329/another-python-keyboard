@@ -34,7 +34,6 @@ class Keyboard:
 		self._default_actionmap = None
 		self._layer_mask = 1
 		self._macro_handler = do_nothing
-		self._pair_handler = do_nothing
 		self._tap_thresh = 170 # micro second
 		self.keys_last_action_code = None
 		self.keys_down_time = None
@@ -48,6 +47,7 @@ class Keyboard:
 		self.hid_manager = HIDDeviceManager(nkro_usb = self.nkro_usb, *params)
 		# initialize shared memory
 		logger.debug("Key count: %d" % self.hardware.key_count)
+		logger.debug("NKRO(USB): %s" % str(self.nkro_usb))
 		self.keys_last_action_code = [0] * self.hardware.key_count
 		self.keys_down_time = [0] * self.hardware.key_count
 		self.keys_up_time = [0] * self.hardware.key_count
@@ -93,7 +93,6 @@ class Keyboard:
 	def register_keymap(self, keymap):
 		self._keymap = keymap
 		self._compile_keymap()
-		# TODO: release all
 
 	def _compile_keymap(self):
 		convert = lambda a: array.array("H", (get_action_code(k) for k in a))
