@@ -4,6 +4,7 @@
 import time
 import array
 import struct
+import microcontroller
 import asyncio
 import adafruit_logging as logging
 logger = logging.getLogger("Keyboard Core")
@@ -56,6 +57,7 @@ class Keyboard:
 		assert hasattr(self.hardware, "hardware_spec")
 		assert hasattr(self.hardware, "key_name")
 		assert hasattr(self.hardware, "key_count")
+		assert hasattr(self.hardware, "suspend")
 		iter(self.hardware)  # hardware should be iterable ( to get key events )
 	
 	def _generate_hid_manager_parameters(self, hardware_spec):
@@ -119,7 +121,24 @@ class Keyboard:
 		return 0
 
 	async def _handle_action_command(self, action_code):
-		pass
+		if action_code == BOOTLOADER:
+			microcontroller.on_next_reset(microcontroller.RunMode.BOOTLOADER)
+			microcontroller.reset() # normally the first line will be enough
+		elif action_code == SUSPEND:
+			await self.hardware.suspend()
+		elif action_code == SHUTDOWN:
+			microcontroller.reset()
+		elif action_code == HEATMAP:
+			# write to a external binary file
+			pass
+		elif action_code == USB_TOGGLE:
+			pass
+		elif action_code == BT_TOGGLE:
+			pass
+		elif BT(0) <= action_code and action_code <= BT(9):
+			i = action_code - BT(0)
+			logger.info("Switch to BT {}".format(i))
+			pass
 
 	async def _handle_action_macro(self, action_code):
 		pass
