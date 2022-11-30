@@ -6,6 +6,7 @@
 import struct
 import time
 import microcontroller
+import asyncio
 import adafruit_logging as logging
 logger = logging.getLogger("HID Manager")
 logger.setLevel(logging.DEBUG)
@@ -28,7 +29,7 @@ except:
 	BLE_AVAILABLE = False
 
 # tools
-from ..utils import do_nothing, is_usb_connected
+from ..utils import do_nothing, is_usb_connected, async_no_fail
 
 
 class HIDDeviceManager:
@@ -48,6 +49,18 @@ class HIDDeviceManager:
 		self._interfaces = dict()
 		self._nkro_usb = nkro_usb
 		self._nkro_ble = False
+		self._hid_ble_handle = None
+		self._ble_radio = None
+		self._ble_mac_pool = None
+		self._ble_id = 1
+		self._ble_battery = None
+		self._ble_advertisement = None
+		self._ble_name_prefix = "PYKB"
+		self._ble_advertise_stop_time = 0
+		self._ble_last_connected_time = time.time()
+		self._current_interface_name = "unknown"
+		self._previous_interface_name = "unknown"
+		self._usb_was_connected = False
 		# initialize interfaces and activate a proper one
 		self.__initialize_usb_interface()
 		if enable_ble and BLE_AVAILABLE:
@@ -58,6 +71,7 @@ class HIDDeviceManager:
 		# get tasks to run
 		# TODO: coroutine to check USB and BLE connections, switch accordingly
 		tasks = list()
+		tasks.append(asyncio.create_task(self.connection_check()))
 		return tasks
 
 	def __initialize_usb_interface(self):
@@ -85,47 +99,108 @@ class HIDDeviceManager:
 		self._ble_advertise_stop_time = -1
 
 	def _auto_select_device(self):
-		# Connected USB > BLE > Disconnect USB
+		# Connected USB > BLE > Disconnected USB
+		# only use in __init__
 		if self._interfaces.get("usb", None) and is_usb_connected():
 			logger.debug("Auto select interface: USB")
+			self.set_current_interface_name("usb")
 			return self._interfaces.get("usb")
 		elif self._interfaces.get("ble", None):
 			logger.debug("Auto select interface: BLE")
+			self.set_current_interface_name("ble")
 			return self._interfaces.get("ble")
 		elif self._interfaces.get("usb", None):
 			logger.debug("Auto select interface: USB")
+			self.set_current_interface_name("usb")
 			return self._interfaces.get("usb")
 		raise RuntimeError("No valid interface!")
+
+	async def connection_check(self):
+		while True:
+			await asyncio.sleep(1) # run at most one time a second
+
+			# check USB, switch to USB automatically if just connected
+			if is_usb_connected():
+				if not self._usb_was_connected:
+					self._usb_was_connected = True
+					self.switch_to_usb()
+			else:
+				self._usb_was_connected = False
+
+			# check BLE, auto stop advertisement
+			if "ble" in self._interfaces:
+				# check connection and advertisment timeout
+				if self._ble_radio._adapter.advertising:
+					if time.time() > self._ble_advertise_stop_time or self.ble_is_connected():
+						await self.ble_advertisement_stop()
+				# check ble connection
+				if self._ble_radio.connected:
+					self._ble_last_connected_time = time.time()
+				else:
+					# not connected, if not disconnected too long, restart advertising
+					if time.time() - self._ble_last_connected_time < 180: # connected 3min ago
+						# start advertisement for 1 min
+						if not self._ble_radio._adapter.advertising:
+							await self.ble_advertisement_start(60)
+				# switch to ble if usb is not available
+				if not is_usb_connected():
+					self.switch_to_ble()
 	
 	def _ble_generate_static_mac(self, n):
 		n = abs(n) & 10
-		if not hasattr(self, "_ble_mac_pool"):
+		if self._ble_mac_pool is None:
 			uid = microcontroller.cpu.uid
 			for i in range(3):
 				uid[i], uid[-(i+1)] = uid[-(i+1)], uid[i]
 			uid = microcontroller.cpu.uid + uid
 			self._ble_mac_pool = uid
+			logger.debug("New MAC Pool: {}".format(self._ble_mac_pool))
 		mac = self._ble_mac_pool[n:n+6]
-		mac[-1] &= 0xC0
+		mac[-1] |= 0xC0
 		address = _bleio.Address(mac, _bleio.Address.RANDOM_STATIC)
 		return address
 
 	## (USB &) BLE interface control
 
+	async def switch_to_previous_interface(self):
+		previous_interface_name = self._previous_interface_name
+		if previous_interface_name == "usb":
+			if is_usb_connected():
+				logger.info("Switch to USB interface")
+				await self.switch_to_usb()
+			pass
+		elif previous_interface_name == "ble":
+			await self.switch_to_ble()
+		else:
+			# do nothing
+			pass
+
 	async def switch_to_usb(self):
 		interface = self._interfaces.get("usb", None)
-		if interface:
+		if interface and self._current_interface_name != "usb":
 			logger.info("Switching to USB")
 			await self.release_all()
+			self.set_current_interface_name("usb")
 			self.current_interface = interface
 
 	async def switch_to_ble(self):
 		interface = self._interfaces.get("ble", None)
-		if interface:
+		if interface and self._current_interface_name != "ble":
 			logger.info("Switching to BLE(%d)" % self._ble_id)
-			await self._release_all()
+			await self.release_all()
+			self.set_current_interface_name("ble")
 			if not self.ble_is_connected:
-				self.ble_advertisement_start(timeout = 60)
+				await self.ble_advertisement_start(timeout = 60)
+
+	async def ble_advertisement_update(self):
+		bt_id = self._ble_id
+		try:
+			self._ble_radio._adapter.address = self._ble_generate_static_mac(bt_id)
+			_name = "%s %s" % (self._ble_name_prefix, str(bt_id))
+			self._ble_radio.name = _name
+			self._ble_advertisement.complete_name = _name
+		except Exception as e:
+			print(e)
 
 	async def ble_switch_to(self, bt_id = -1):
 		if not hasattr(self, "_hid_ble"):
@@ -134,42 +209,37 @@ class HIDDeviceManager:
 		bt_id = abs(bt_id) % 10 # limit it
 		if self._ble_id == bt_id:
 			# if not connected, advertise, switch to bt
+			# reset last connected time so advertisement will auto start
+			self._ble_last_connected_time = time.time()
 			await self.switch_to_ble()
 			return
+		else:
+			self._ble_id == bt_id
 
 		# stop advertising and disconnect all
 		await self.ble_advertisement_stop()
 		await self.ble_disconnect_all()
 
-		# change name and MAC
-		try:
-			self._ble_radio._adapter.address = self._ble_generate_static_mac(bt_id)
-			_name = "%s %s" % self._ble_name_prefix, bt_id
-			self._ble_radio.name = _name
-			self._ble_advertisement.complete_name = _name
-			self._ble_id = bt_id
-		except Exception as e:
-			print(e)
 		# restart advertising will be done by check
 		await self.switch_to_ble()
 
 	async def ble_advertisement_start(self, timeout = 60):
+		await self.ble_advertisement_stop()
+		await self.ble_advertisement_update()
 		self._ble_radio.start_advertising(self._ble_advertisement)
-		if timeout > 0:
-			self._ble_advertise_stop_time = time.time() + timeout
+		self._ble_advertise_stop_time = time.time() + timeout
 
 	async def ble_advertisement_stop(self):
 		try:
 			self._ble_radio.stop_advertising()
-			self._ble_advertise_stop_time = -1
 		except Exception as e:
 			print(e)
 
-	async def ble_is_connected(self):
+	def ble_is_connected(self):
 		return self._ble_radio.connected
 
 	async def ble_disconnect_all(self):
-		if self._ble_radio.connected:
+		if self.ble_is_connected:
 			for c in self._ble_radio.connections:
 				c.disconnect()
 
@@ -179,32 +249,46 @@ class HIDDeviceManager:
 
 	## HID control API mirrored from interface wrapper
 
+	@async_no_fail
 	async def release_all(self):
-		self.current_interface.release_all()
+		await self.current_interface.release_all()
 
+	@async_no_fail
 	async def keyboard_press(self, *keycodes):
 		await self.current_interface.keyboard_press(*keycodes)
 
+	@async_no_fail
 	async def keyboard_release(self, *keycodes):
 		await self.current_interface.keyboard_release(*keycodes)
 
+	@async_no_fail
 	async def consumer_control_press(self, keycode):
 		await self.current_interface.consumer_control_press(keycode)
 	
+	@async_no_fail
 	async def consumer_control_release(self, keycode):
 		await self.current_interface.consumer_control_release(keycode)
 
+	@async_no_fail
 	async def mouse_press(self, buttons):
 		await self.current_interface.mouse_press(buttons)
 
+	@async_no_fail
 	async def mouse_release(self, buttons):
 		await self.current_interface.mouse_release(buttons)
 
+	@async_no_fail
 	async def mouse_move(self, buttons, x=0, y=0, wheel=0):
 		await self.current_interface.mouse_move(buttons, x, y, wheel)
 
 	## Misc
-
+	def set_current_interface_name(self, value):
+		self._previous_interface_name = self._current_interface_name
+		self._current_interface_name = value
+	
+	def get_current_interface_name(self):
+		return self._current_interface_name
+		
 	@property
 	def keyboard_led_status(self):
 		# get current led status (Capslock, etc.)

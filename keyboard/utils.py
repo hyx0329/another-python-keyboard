@@ -19,6 +19,17 @@ def do_nothing(*args, **kargs):
 	pass
 
 
+def async_no_fail(func):
+	# for async functions
+	async def safed_func(*args, **kwargs):
+		try:
+			return await func(*args, **kwargs)
+		except Exception as e:
+			print(e)
+		return None
+	return safed_func
+
+
 class LightQueue:
 	def __init__(self, size):
 		self.capacity = size

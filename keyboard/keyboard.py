@@ -27,6 +27,7 @@ class Keyboard:
 		self.hid_manager = None
 		self.nkro_usb = nkro_usb
 		self._keymap = None
+		self._heatmap = None # TODO: load heatmap?
 		self._profiles = {}  # profile auto switching is not supported yet
 		self._pairs = ()
 		self._actionmap = None
@@ -43,11 +44,12 @@ class Keyboard:
 		# check then setup basics
 		logger.debug("Initializing the hardware and hid_manager")
 		self._check_hardware_api(self.hardware)
-		params = self._generate_hid_manager_parameters(self.hardware.hardware_spec)
+		params = self._generate_hid_manager_parameters_from_hardware_spec(self.hardware.hardware_spec)
 		self.hid_manager = HIDDeviceManager(nkro_usb = self.nkro_usb, *params)
 		# initialize shared memory
 		logger.debug("Key count: %d" % self.hardware.key_count)
 		logger.debug("NKRO(USB): %s" % str(self.nkro_usb))
+		self._heatmap = [0] * self.hardware.key_count
 		self.keys_last_action_code = [0] * self.hardware.key_count
 		self.keys_down_time = [0] * self.hardware.key_count
 		self.keys_up_time = [0] * self.hardware.key_count
@@ -61,7 +63,7 @@ class Keyboard:
 		assert hasattr(self.hardware, "suspend")
 		iter(self.hardware)  # hardware should be iterable ( to get key events )
 	
-	def _generate_hid_manager_parameters(self, hardware_spec):
+	def _generate_hid_manager_parameters_from_hardware_spec(self, hardware_spec):
 		params = dict()
 		params["enable_ble"] = hardware_spec & hwspecs.HAS_BLE != 0
 		params["ble_battery"] = hardware_spec & hwspecs.HAS_BATTERY != 0
@@ -129,16 +131,16 @@ class Keyboard:
 		elif action_code == SHUTDOWN:
 			microcontroller.reset()
 		elif action_code == HEATMAP:
-			# write to a external binary file
-			pass
+			# TODO: write to a external binary file
+			print(self._heatmap)
 		elif action_code == USB_TOGGLE:
-			pass
+			await self.hid_manager.switch_to_usb()
 		elif action_code == BT_TOGGLE:
-			pass
+			await self.hid_manager.switch_to_ble()
 		elif BT(0) <= action_code and action_code <= BT(9):
 			i = action_code - BT(0)
 			logger.info("Switch to BT {}".format(i))
-			pass
+			await self.hid_manager.ble_switch_to(i)
 
 	async def _handle_action_macro(self, action_code):
 		pass
@@ -236,6 +238,7 @@ class Keyboard:
 
 				if press:
 					keys_down_time[key_id] = trigger_time
+					self._heatmap[key_id] += 1
 
 					# trigger tapkey `hold` action when key down events detected
 					# This will alter self._layer_mask thus affect action_code
