@@ -95,12 +95,17 @@ class KeyboardHardware:
 	@property
 	def hardware_spec(self):
 		# ble only: 0b01
-		# with battery: 0b11
+		# with battery: 0b10
 		return 0b11
 
 	@property
 	def key_count(self):
 		return self._matrix.key_count
+
+	async def suspend(self):
+		# generally, return 0 means no error, but not necessarily suspended
+		# a successful suspend action will reset the supervisor
+		return 0
 
 	async def get_battery_level(self):
 		return battery_level()
