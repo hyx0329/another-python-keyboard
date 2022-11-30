@@ -51,9 +51,9 @@ class KeyboardHardware:
 	def __init__(self):
 		self._matrix = Matrix2(MATRIX_ROWS, MATRIX_COLS,
 						 columns_to_anodes=True,
-						 max_bit_count=3,
-						 active_bit_count=2,
-						 inactive_bit_count=1)
+						 max_bit_count=6,
+						 active_bit_count=5,
+						 inactive_bit_count=3)
 		self._battery_update_callback = lambda x: None
 		self.key_name = key_name
 	
@@ -105,6 +105,7 @@ class KeyboardHardware:
 	async def suspend(self):
 		# generally, return 0 means no error, but not necessarily suspended
 		# a successful suspend action will reset the supervisor
+		self._matrix.suspend()
 		return 0
 
 	async def get_battery_level(self):

@@ -4,12 +4,13 @@ from .default import kb_layer2_media, kb_layer3_kbcontrol, kb_layer4_restore, kb
 from .default import ___, FNL1, L2D, L3B, LSFT4, RSFT4, L5S, SCC, BOOT
 
 CESC = MODS_TAP(MODS(LCTRL), ESC)
+L2TAB = LAYER_TAP(2, TAB)
 
 # layer 0
 kb_layer0_base = (
 	ESC,   1,   2,   3,   4,   5,   6,   7,   8,   9,   0, '-', '=', BACKSPACE,
-	TAB,   Q,   W,   E,   R,   T,   Y,   U,   I,   O,   P, '[', ']', '|',
-	CESC,  A, L5S, L2D,   F,   G,   H,   J,   K,   L, SCC, '"',    ENTER,
+	L2TAB, Q,   W,   E,   R,   T,   Y,   U,   I,   O,   P, '[', ']', '|',
+	CESC,  A,   S,   D,   F,   G,   H,   J,   K,   L, SCC, '"',    ENTER,
 	LSFT4, Z,   X,   C,   V, L3B,   N,   M, ',', '.', '/',         RSFT4,
 	LCTRL, LALT, LGUI,          SPACE,            RGUI, RALT, FNL1, RCTRL
 )
