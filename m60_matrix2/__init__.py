@@ -13,6 +13,7 @@ from .bsm import (
 	battery_level,
 	Backlight,
 )
+from .light_queue import LightQueue
 
 
 KEY_NAME =  (
@@ -35,13 +36,16 @@ def ms():
 
 
 class KeyEventIterator:
-	def __init__(self, matrix):
+	def __init__(self, matrix, queue):
 		self._matrix_iter = iter(matrix)
+		self._queue = queue
 	
 	def __next__(self):
 		# convert the event's key ID to location on the keymap
 		# inner iterator will raise the StopIteration
+		# also triggers hardware's key handler
 		event = next(self._matrix_iter)
+		self._queue.put(event)
 		event = COORDS[event & 0x7F] | (event & 0x80)
 		return event
 
@@ -59,8 +63,8 @@ class KeyboardHardware:
 						 max_bit_count=6,
 						 active_bit_count=5,
 						 inactive_bit_count=3)
-		self._backlight = Backlight()
-		self._battery_update_callback = lambda x: None
+		self.backlight = Backlight()
+		self.light_queue = LightQueue(self._matrix.key_count)
 		self.key_name = key_name
 		self._hid_info = None
 	
@@ -74,7 +78,7 @@ class KeyboardHardware:
 		return self._matrix[key]
 
 	def __iter__(self):
-		return KeyEventIterator(self._matrix)
+		return KeyEventIterator(self._matrix, self.light_queue)
 
 	def get_all_tasks(self):
 		# return a list of tasks
@@ -94,8 +98,10 @@ class KeyboardHardware:
 
 	async def _backlight_routine(self):
 		hid_info = self._hid_info
-		backlight = self._backlight
+		backlight = self.backlight
 		battery_update_time = time.time()
+		led_check_counter = 1
+		led_check_thresh = 1 << 8
 
 		if hid_info is None:
 			return
@@ -111,12 +117,23 @@ class KeyboardHardware:
 			# hid led
 			backlight.set_hid_leds(hid_info.keyboard_led)
 
-			# battery level
+			# battery level, in a backlight coroutine hahaha(not that good)
 			if time.time() > battery_update_time:
 				hid_info.set_battery_level(battery_level())
 				battery_update_time = time.time() + 300  # update every 5 min
 
-			# TODO: implement fancy backlight
+			# for a special backlight mode
+			for event in self.light_queue:
+				key = event & 0x7F
+				pressed = event & 0x80 == 0
+				backlight.handle_key(key, pressed)
+
+			if led_check_counter > led_check_thresh:
+				backlight.check() # high CPU usage
+				led_check_counter = 1
+			else:
+				led_check_counter <<= 1
+
 			backlight.update()
 
 	async def get_keys(self):
@@ -146,10 +163,4 @@ class KeyboardHardware:
 
 	async def get_battery_level(self):
 		return battery_level()
-
-	async def set_keyboard_led(self):
-		pass
-
-	async def set_gamepad_led(self):
-		pass
 

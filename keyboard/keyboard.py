@@ -10,8 +10,7 @@ import adafruit_logging as logging
 logger = logging.getLogger("Keyboard Core")
 logger.setLevel(logging.DEBUG)
 
-from .utils import do_nothing
-# TODO: explict import
+from .utils import do_nothing, async_no_fail
 from .action_code import *
 from .hid import HIDDeviceManager, HIDInfo
 import keyboard.hardware_spec_ids as hwspecs
@@ -190,6 +189,26 @@ class Keyboard:
 		elif key_variant == ACT_LAYER_TAP or key_variant == ACT_LAYER_TAP_EXT:
 			self._layer_mask |= 1 << param
 
+	@async_no_fail
+	async def _handle_action_backlight(self, action_code):
+		backlight = self.hardware.backlight
+		if action_code == RGB_MOD:
+			backlight.next()
+		elif action_code == RGB_TOGGLE:
+			backlight.toggle()
+		elif action_code == RGB_HUE:
+			backlight.hue += 8
+		elif action_code == HUE_RGB:
+			backlight.hue -= 8
+		elif action_code == RGB_SAT:
+			backlight.sat += 8
+		elif action_code == SAT_RGB:
+			backlight.sat -= 8
+		elif action_code == RGB_VAL:
+			backlight.val += 8
+		elif action_code == VAL_RGB:
+			backlight.val -= 8
+
 	async def _main_routine(self):
 		# there's some circuitpython limit that prevents too many long function calls
 		# so I have to write everything in one loop
@@ -320,7 +339,7 @@ class Keyboard:
 					elif key_variant == ACT_MACRO:
 						await self._handle_action_macro(action_code)
 					elif key_variant == ACT_BACKLIGHT:
-						pass
+						await self._handle_action_backlight(action_code)
 					elif key_variant == ACT_COMMAND:
 						await self._handle_action_command(action_code)
 					
