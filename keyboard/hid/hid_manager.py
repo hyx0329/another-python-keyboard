@@ -198,6 +198,8 @@ class HIDDeviceManager:
 			self.current_interface = interface
 			self.set_current_interface_name("ble")
 			# the check loop will restart the advertisement automatically, don't do it here
+			# but set the time
+			self._ble_last_connected_time = time.time()
 
 	async def ble_advertisement_update(self):
 		bt_id = self._ble_id
