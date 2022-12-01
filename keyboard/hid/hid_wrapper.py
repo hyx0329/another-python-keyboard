@@ -1,5 +1,6 @@
 # -*- encoding: utf-8 -*-
 # vim: ts=4 noexpandtab
+import struct
 
 class DummyControl:
 	# The dummy one only implements a send_report and to avoid failure only
