@@ -1,11 +1,16 @@
 # -*- encoding: utf-8 -*-
 # vim: ts=4 noexpandtab
 import storage
+import supervisor
+
 try:
 	from keyboard_config import NKRO, USB_STORAGE_MODE
 except:
 	NKRO = False
 	USB_STORAGE_MODE = 0
+
+# disable supervisor's interference
+supervisor.disable_ble_workflow()
 
 # NKRO config
 if NKRO:
