@@ -13,7 +13,7 @@ logger.setLevel(logging.DEBUG)
 from .utils import do_nothing
 # TODO: explict import
 from .action_code import *
-from .hid import HIDDeviceManager
+from .hid import HIDDeviceManager, HIDInfo
 import keyboard.hardware_spec_ids as hwspecs
 
 class Keyboard:
@@ -29,7 +29,6 @@ class Keyboard:
 		self._keymap = None
 		self._heatmap = None # TODO: load heatmap?
 		self._profiles = {}  # profile auto switching is not supported yet
-		self._pairs = ()
 		self._actionmap = None
 		self._actionmaps = None
 		self._default_actionmap = None
@@ -46,6 +45,8 @@ class Keyboard:
 		self._check_hardware_api(self.hardware)
 		params = self._generate_hid_manager_parameters_from_hardware_spec(self.hardware.hardware_spec)
 		self.hid_manager = HIDDeviceManager(nkro_usb = self.nkro_usb, *params)
+		hid_info = HIDInfo(self.hid_manager)
+		self.hardware.register_hid_info(hid_info)
 		# initialize shared memory
 		logger.debug("Key count: %d" % self.hardware.key_count)
 		logger.debug("NKRO(USB): %s" % str(self.nkro_usb))
@@ -61,6 +62,7 @@ class Keyboard:
 		assert hasattr(self.hardware, "key_name")
 		assert hasattr(self.hardware, "key_count")
 		assert hasattr(self.hardware, "suspend")
+		assert hasattr(self.hardware, "register_hid_info")
 		iter(self.hardware)  # hardware should be iterable ( to get key events )
 	
 	def _generate_hid_manager_parameters_from_hardware_spec(self, hardware_spec):
@@ -78,7 +80,7 @@ class Keyboard:
 		hid_tasks = self.hid_manager.get_all_tasks()
 		hardware_tasks = self.hardware.get_all_tasks()
 		tasks = own_tasks + hid_tasks + hardware_tasks
-		logger.debug("Start running %d tasks" % len(tasks))
+		logger.debug("%d tasks collected" % len(tasks))
 		await asyncio.gather(*tasks)
 
 	def get_all_tasks(self):
@@ -207,15 +209,24 @@ class Keyboard:
 		tap_key_last_id = 0
 		tap_key_variant = 0 # also a marker whether tapkey is processed
 
+		# for auto suspend, like a watch dog
+		last_active_time = time.time()
+		suspend_time_limit = 10 * 60  # 10 min
+
 		# report loop
 		while True:
+			if time.time() - last_active_time > suspend_time_limit:
+				logger.info("Auto suspend the keyboard")
+				await input_hardware.suspend()
+				# set last_active_time in case suspend is a dummy function
+				last_active_time = time.time()
+
 			# switch task, give some time to the scanner
 			await asyncio.sleep(0)
 
 			event_count = await input_hardware.get_keys()
 			trigger_time = time.monotonic_ns() // 1000000 & 0x7FFFFFFF
 
-			# TODO: here add pair key detection
 			
 			# check tapkey before any action
 			# hold: 12~8: 5bits, modifiers or layer
@@ -239,6 +250,7 @@ class Keyboard:
 				if press:
 					keys_down_time[key_id] = trigger_time
 					self._heatmap[key_id] += 1
+					last_active_time = time.time()
 
 					# trigger tapkey `hold` action when key down events detected
 					# This will alter self._layer_mask thus affect action_code

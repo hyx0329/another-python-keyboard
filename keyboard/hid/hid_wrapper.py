@@ -56,10 +56,18 @@ class HIDInterfaceWrapper:
 		return 0
 	
 	def _get_kbd_led_status_ble(self):
-		return self.keyboard.report[0]
+		report = self.keyboard.report
+		if report is not None:
+			return report[0]
+		else:
+			return 0
 
 	def _get_kbd_led_status_usb(self):
-		return self.keyboard.last_received_report[0]
+		report = self.keyboard.last_received_report
+		if report is not None:
+			return report[0]
+		else:
+			return 0
 
 	@property
 	def keyboard_led_status(self):

@@ -153,17 +153,12 @@ class HIDDeviceManager:
 					await self.switch_to_ble()
 	
 	def _ble_generate_static_mac(self, n):
-		n = abs(n) & 10
-		if self._ble_mac_pool is None:
-			uid = microcontroller.cpu.uid
-			for i in range(3):
-				uid[i], uid[-(i+1)] = uid[-(i+1)], uid[i]
-			uid = microcontroller.cpu.uid + uid
-			self._ble_mac_pool = uid
-			logger.debug("New MAC Pool: {}".format(self._ble_mac_pool))
-		mac = self._ble_mac_pool[n:n+6]
-		mac[-1] |= 0xC0
-		address = _bleio.Address(mac, _bleio.Address.RANDOM_STATIC)
+		n = abs(n) % 10
+		uid = microcontroller.cpu.uid
+		mac = bytearray( (i+n*2) & 0xFF for i in uid[:6] )
+		mac[-1] |= 0xC0 # only this is necessary for RANDOM_STATIC
+		mac[0] |= 0xC0
+		address = _bleio.Address(bytes(mac), _bleio.Address.RANDOM_STATIC)
 		return address
 
 	## (USB &) BLE interface control
@@ -230,8 +225,8 @@ class HIDDeviceManager:
 		await self.ble_advertisement_stop()
 		await self.ble_disconnect_all()
 		#await self.ble_advertisement_update()
+		await self.ble_advertisement_start()
 
-		# restart advertising will be done by check
 		await self.switch_to_ble()
 
 	async def ble_advertisement_start(self, timeout = 60):
@@ -261,7 +256,7 @@ class HIDDeviceManager:
 				c.disconnect()
 
 	async def ble_set_battery_level(self, value: int):
-		if hasattr(self._ble_battery):
+		if self._ble_battery is not None:
 			self._ble_battery.value = max(0, min(100, value))
 
 	## HID control API mirrored from interface wrapper
