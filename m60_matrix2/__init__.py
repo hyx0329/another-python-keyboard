@@ -2,6 +2,7 @@
 # vim: ts=4 noexpandtab
 
 import asyncio
+import time
 
 from matrix2 import Matrix2
 from .bsm import (
@@ -29,6 +30,10 @@ def key_name(key):
 	return KEY_NAME[key]
 
 
+def ms():
+	return (time.monotonic_ns() // 1000000) & 0x7FFFFFFF
+
+
 class KeyEventIterator:
 	def __init__(self, matrix):
 		self._matrix_iter = iter(matrix)
@@ -54,8 +59,10 @@ class KeyboardHardware:
 						 max_bit_count=6,
 						 active_bit_count=5,
 						 inactive_bit_count=3)
+		self._backlight = Backlight()
 		self._battery_update_callback = lambda x: None
 		self.key_name = key_name
+		self._hid_info = None
 	
 	def get(self):
 		self._matrix.get()
@@ -73,15 +80,44 @@ class KeyboardHardware:
 		# return a list of tasks
 		tasks = list()
 		tasks.append(asyncio.create_task(self._scan_routine()))
+		if self._hid_info is not None:
+			tasks.append(asyncio.create_task(self._backlight_routine()))
 		return tasks
+
+	def register_hid_info(self, hid_info):
+		self._hid_info = hid_info
 
 	async def _scan_routine(self):
 		while True:
 			self._matrix.scan()
 			await asyncio.sleep(0)
 
-	async def _led_routine(self):
-		raise NotImplemented
+	async def _backlight_routine(self):
+		hid_info = self._hid_info
+		backlight = self._backlight
+		battery_update_time = time.time()
+
+		if hid_info is None:
+			return
+
+		while True:
+			await asyncio.sleep(0)
+			# ble led
+			if hid_info.ble_advertising:
+				backlight.set_bt_led(self._hid_info.ble_id)
+			else:
+				backlight.set_bt_led(None)
+
+			# hid led
+			backlight.set_hid_leds(hid_info.keyboard_led)
+
+			# battery level
+			if time.time() > battery_update_time:
+				hid_info.set_battery_level(battery_level())
+				battery_update_time = time.time() + 300  # update every 5 min
+
+			# TODO: implement fancy backlight
+			backlight.update()
 
 	async def get_keys(self):
 		# generate key events and return events count
@@ -103,17 +139,17 @@ class KeyboardHardware:
 		return self._matrix.key_count
 
 	async def suspend(self):
+		# enter low power mode
 		# generally, return 0 means no error, but not necessarily suspended
-		# a successful suspend action will reset the supervisor
-		self._matrix.suspend()
-		return 0
+		# since a successful suspend action will reset the supervisor
+		return self._matrix.suspend()
 
 	async def get_battery_level(self):
 		return battery_level()
 
 	async def set_keyboard_led(self):
 		pass
-	
+
 	async def set_gamepad_led(self):
 		pass
 

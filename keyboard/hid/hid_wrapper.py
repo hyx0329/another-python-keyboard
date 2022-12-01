@@ -19,6 +19,25 @@ def find_device(devices, usage_page, usage):
 			return device
 	return DummyControl()
 
+def find_device_report(devices, usage_page, usage):
+	for device in devices:
+		if (
+			device.usage_page == usage_page
+			and device.usage == usage
+			and hasattr(device, "report")
+		):
+			return device
+	return None
+
+def find_device_last_received_report(devices, usage_page, usage):
+	for device in devices:
+		if (
+			device.usage_page == usage_page
+			and device.usage == usage
+			and hasattr(device, "last_received_report")
+		):
+			return device
+	return None
 
 class HIDInterfaceWrapper:
 	# read:
@@ -26,14 +45,15 @@ class HIDInterfaceWrapper:
 	# https://learn.adafruit.com/customizing-usb-devices-in-circuitpython/hid-devices
 	# https://docs.circuitpython.org/projects/ble/en/latest/standard_services.html#adafruit_ble.services.standard.hid.HIDService
     # suitable for 6KRO
+	# for bluetooth interface, the hid out and in use different objects
 
 	def __init__(self, devices):
+		self.devices = devices
 		self.keyboard = find_device(devices, usage_page=0x1, usage=0x06)
 		self.mouse = find_device(devices, usage_page=0x1, usage=0x02)
 		self.consumer_control = find_device(devices, usage_page=0x0C, usage=0x01)
 		self.gamepad = find_device(devices, usage_page=0x1, usage=0x05)
-		self.setup_keyboard_led()
-		#self.setup_gamepad_led()
+		self.keyboard_reporter = None
 
 		# the reports to send, pre allocate the memory
 		# these are negotiated through `descriptors`
@@ -45,30 +65,41 @@ class HIDInterfaceWrapper:
 		self.report_consumer_control = bytearray(2)
 		self.report_mouse = bytearray(4)
 		#self.report_gamepad = None
+		self.last_received_report_keyboard = bytes(1)
 	
-	def setup_keyboard_led(self):
-		if hasattr(self.keyboard, "last_received_report"):
-			self.get_keyboard_led_status = self._get_kbd_led_status_usb
-		elif hasattr(self.keyboard, "report"):
-			self.get_keyboard_led_status = self._get_kbd_led_status_ble
-
 	def get_keyboard_led_status(self):
-		return 0
+		if hasattr(self.keyboard, "get_last_received_report"):
+			self.get_keyboard_led_status = self.get_keyboard_led_status_from_last_report_api
+			return self.get_keyboard_led_status_from_last_report_api()
+		else:
+			# out reports are received from a different handle
+			device1 = find_device_last_received_report(self.devices, usage_page=0x1, usage=0x06)
+			device2 = find_device_report(self.devices, usage_page=0x1, usage=0x06)
+			if device1 is not None:
+				self.keyboard_reporter = device1
+				self.get_keyboard_led_status = self.get_keyboard_led_status_from_last_report_array
+				return self.get_keyboard_led_status_from_last_report_array()
+			elif device2 is not None:
+				self.keyboard_reporter = device2
+				self.get_keyboard_led_status = self.get_keyboard_led_status_from_report_array
+				return self.get_keyboard_led_status_from_report_array()
+			else:
+				self.get_keyboard_led_status = lambda : 0
 	
-	def _get_kbd_led_status_ble(self):
-		report = self.keyboard.report
+	def get_keyboard_led_status_from_report_array(self):
+		return self.keyboard_reporter.report[0]
+
+	def get_keyboard_led_status_from_last_report_array(self):
+		return self.keyboard_reporter.last_received_report[0]
+
+	def get_keyboard_led_status_from_last_report_api(self):
+		report = self.keyboard.get_last_received_report()
 		if report is not None:
+			self.last_received_report_keyboard = report
 			return report[0]
 		else:
-			return 0
-
-	def _get_kbd_led_status_usb(self):
-		report = self.keyboard.last_received_report
-		if report is not None:
-			return report[0]
-		else:
-			return 0
-
+			return self.last_received_report_keyboard[0]
+	
 	@property
 	def keyboard_led_status(self):
 		return self.get_keyboard_led_status()
@@ -152,17 +183,18 @@ class HIDInterfaceWrapperNKRO(HIDInterfaceWrapper):
 	# currently only keyboard is different so I inherit other from original implementation
 
 	def __init__(self, devices):
+		self.devices = devices
 		self.keyboard = find_device(devices, usage_page=0x1, usage=0x06)
 		self.mouse = find_device(devices, usage_page=0x1, usage=0x02)
 		self.consumer_control = find_device(devices, usage_page=0x0C, usage=0x01)
 		self.gamepad = find_device(devices, usage_page=0x1, usage=0x05)
-		self.setup_keyboard_led()
 
 		# a little different for keyboard
-		self.report_keyboard = bytearray(16)
+		self.report_keyboard = bytearray(16) # 16 bytes is a predefined size in the HID descriptor
 		self.report_keys = memoryview(self.report_keyboard)[1:]
 		self.report_consumer_control = bytearray(2)
 		self.report_mouse = bytearray(4)
+		self.last_received_report_keyboard = bytes(1)
 
 	async def keyboard_press(self, *keycodes):
 		for keycode in keycodes:
