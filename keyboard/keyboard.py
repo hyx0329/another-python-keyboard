@@ -139,7 +139,7 @@ class Keyboard:
 			await self.hid_manager.switch_to_ble()
 		elif BT(0) <= action_code and action_code <= BT(9):
 			i = action_code - BT(0)
-			logger.info("Switch to BT {}".format(i))
+			logger.info("Manager: Switch to BT {}".format(i))
 			await self.hid_manager.ble_switch_to(i)
 
 	async def _handle_action_macro(self, action_code):

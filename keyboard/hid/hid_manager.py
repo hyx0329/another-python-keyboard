@@ -55,8 +55,9 @@ class HIDDeviceManager:
 		self._ble_id = 1
 		self._ble_battery = None
 		self._ble_advertisement = None
+		self._ble_advertisement_started = False
 		self._ble_name_prefix = "PYKB"
-		self._ble_advertise_stop_time = 0
+		self._ble_advertise_stop_time = time.time()
 		self._ble_last_connected_time = time.time()
 		self._current_interface_name = "unknown"
 		self._previous_interface_name = "unknown"
@@ -96,7 +97,6 @@ class HIDDeviceManager:
 		self._ble_advertisement.appearance = 961 # keyboard
 		self._ble_name_prefix = "PYKB" # TODO: better naming?
 		self._ble_id = 1
-		self._ble_advertise_stop_time = -1
 
 	def _auto_select_device(self):
 		# Connected USB > BLE > Disconnected USB
@@ -122,29 +122,35 @@ class HIDDeviceManager:
 			# check USB, switch to USB automatically if just connected
 			if is_usb_connected():
 				if not self._usb_was_connected:
-					self._usb_was_connected = True
-					self.switch_to_usb()
+					await self.switch_to_usb()
+				self._usb_was_connected = True
 			else:
 				self._usb_was_connected = False
 
 			# check BLE, auto stop advertisement
 			if "ble" in self._interfaces:
-				# check connection and advertisment timeout
-				if self._ble_radio._adapter.advertising:
-					if time.time() > self._ble_advertise_stop_time or self.ble_is_connected():
+				# check connection and advertisement timeout
+				if self._ble_radio.advertising:
+					if time.time() > self._ble_advertise_stop_time:
 						await self.ble_advertisement_stop()
 				# check ble connection
 				if self._ble_radio.connected:
 					self._ble_last_connected_time = time.time()
-				else:
-					# not connected, if not disconnected too long, restart advertising
-					if time.time() - self._ble_last_connected_time < 180: # connected 3min ago
-						# start advertisement for 1 min
-						if not self._ble_radio._adapter.advertising:
+					await self.ble_advertisement_stop()
+				# auto restart advertisement
+				# not connected doesn't mean it's not trying to connect, so, watchout
+				# here I use `self._ble_advertisement_started` to mark if ble advertisement already started by me
+				# This value is set to False when self.ble_advertisement_stop is called
+				# when making connections, the ble advertisement will be stopped
+				if self._current_interface_name == "ble" \
+					and not self._ble_radio.advertising \
+					and not self._ble_radio.connected \
+					and not self._ble_advertisement_started:
+						if time.time() - self._ble_last_connected_time < 180: # connected 3min ago
 							await self.ble_advertisement_start(60)
 				# switch to ble if usb is not available
 				if not is_usb_connected():
-					self.switch_to_ble()
+					await self.switch_to_ble()
 	
 	def _ble_generate_static_mac(self, n):
 		n = abs(n) & 10
@@ -180,17 +186,18 @@ class HIDDeviceManager:
 		if interface and self._current_interface_name != "usb":
 			logger.info("Switching to USB")
 			await self.release_all()
-			self.set_current_interface_name("usb")
 			self.current_interface = interface
+			self.set_current_interface_name("usb")
 
 	async def switch_to_ble(self):
 		interface = self._interfaces.get("ble", None)
 		if interface and self._current_interface_name != "ble":
 			logger.info("Switching to BLE(%d)" % self._ble_id)
 			await self.release_all()
+			await self.ble_advertisement_update()
+			self.current_interface = interface
 			self.set_current_interface_name("ble")
-			if not self.ble_is_connected:
-				await self.ble_advertisement_start(timeout = 60)
+			# the check loop will restart the advertisement automatically, don't do it here
 
 	async def ble_advertisement_update(self):
 		bt_id = self._ble_id
@@ -199,11 +206,12 @@ class HIDDeviceManager:
 			_name = "%s %s" % (self._ble_name_prefix, str(bt_id))
 			self._ble_radio.name = _name
 			self._ble_advertisement.complete_name = _name
+			logger.debug("Update BLE info: %s, %s" % (_name, str(self._ble_radio._adapter.address)))
 		except Exception as e:
 			print(e)
 
 	async def ble_switch_to(self, bt_id = -1):
-		if not hasattr(self, "_hid_ble"):
+		if not "ble" in self._interfaces:
 			return
 
 		bt_id = abs(bt_id) % 10 # limit it
@@ -214,31 +222,38 @@ class HIDDeviceManager:
 			await self.switch_to_ble()
 			return
 		else:
-			self._ble_id == bt_id
+			self._ble_id = bt_id
 
 		# stop advertising and disconnect all
 		await self.ble_advertisement_stop()
 		await self.ble_disconnect_all()
+		#await self.ble_advertisement_update()
 
 		# restart advertising will be done by check
 		await self.switch_to_ble()
 
 	async def ble_advertisement_start(self, timeout = 60):
-		await self.ble_advertisement_stop()
+		#await self.ble_advertisement_stop()
 		await self.ble_advertisement_update()
-		self._ble_radio.start_advertising(self._ble_advertisement)
-		self._ble_advertise_stop_time = time.time() + timeout
+		self._ble_advertise_stop_time = time.time() + max(10, timeout)
+		if not self._ble_radio.advertising:
+			logger.debug("Starting BLE advertisement")
+			self._ble_radio.start_advertising(self._ble_advertisement)
 
 	async def ble_advertisement_stop(self):
-		try:
-			self._ble_radio.stop_advertising()
-		except Exception as e:
-			print(e)
+		self._ble_advertisement_started = False
+		if self._ble_radio.advertising:
+			logger.debug("Stopping BLE advertisement")
+			try:
+				self._ble_radio.stop_advertising()
+			except Exception as e:
+				print(e)
 
 	def ble_is_connected(self):
 		return self._ble_radio.connected
 
 	async def ble_disconnect_all(self):
+		logger.debug("Disconnecting all BLE hosts")
 		if self.ble_is_connected:
 			for c in self._ble_radio.connections:
 				c.disconnect()
