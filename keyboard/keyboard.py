@@ -10,7 +10,7 @@ import adafruit_logging as logging
 logger = logging.getLogger("Keyboard Core")
 logger.setLevel(logging.DEBUG)
 
-from .utils import do_nothing, async_no_fail
+from .utils import do_nothing, async_no_fail, ms
 from .action_code import *
 from .hid import HIDDeviceManager, HIDInfo
 import keyboard.hardware_spec_ids as hwspecs
@@ -190,6 +190,12 @@ class Keyboard:
 		elif key_variant == ACT_LAYER_TAP or key_variant == ACT_LAYER_TAP_EXT:
 			self._layer_mask |= 1 << param
 
+	async def _trigger_tapkey_action_tap(self, key_id, key_variant):
+		action_code = self.keys_last_action_code[key_id]
+		keycode = action_code & 0xFF
+		self.keys_last_action_code[key_id] = keycode
+		await self.hid_manager.keyboard_press(keycode)
+
 	@async_no_fail
 	async def _handle_action_backlight(self, action_code):
 		backlight = self.hardware.backlight
@@ -225,9 +231,36 @@ class Keyboard:
 		# Trigger them before new key's arrival
 		# Since every tap key is triggered before any new key's down event processed,
 		# there will be only one tap key to process
+		# Normal Typing 1 - A is a tap-key
+		#   A↓      B↓      A↑      B↑
+		# --+-------+-------+-------+------> t
+		#           |       |
+		#           V
+		#           Trigger A(HOLD) here
+		# Normal Typing 2 - A is a tap-key
+		#   A↓              A↑
+		# --+-------+-------+--------------> t
+		#      dt1  |       |
+		#           V
+		#           Trigger A(HOLD) here, dt1 > tap_thresh
 		tap_thresh = self._tap_thresh
 		tap_key_last_id = 0
 		tap_key_variant = 0 # also a marker whether tapkey is processed
+		# to improve fast typing, use tap_delay to find out if the key is a tap in a sequence
+		# Fast Typing - B is a tap-key
+		#   A↓      B↓      A↑      B↑
+		# --+-------+-------+-------+------> t
+		#           |  dt1  |
+		#         dt1 < tap_delay
+		tap_delay = 65 # ms
+		# to further impove fast typing, add another check
+		# Fast Typing - B is a tap-key
+		#   B↓      C↓      B↑      C↑
+		# --+-------+-------+-------+------> t
+		#   |  dt1  |  dt2  |
+		# dt1 < tap_delay && dt2 < fast_type_thresh
+		# but I'm not going to implement it, as it breaks the first scenario and makes things complicated
+
 
 		# for auto suspend, like a watch dog
 		last_active_time = time.time()
@@ -245,7 +278,7 @@ class Keyboard:
 			await asyncio.sleep(0)
 
 			event_count = await input_hardware.get_keys()
-			trigger_time = time.monotonic_ns() // 1000000 & 0x7FFFFFFF
+			trigger_time = ms()
 
 			
 			# check tapkey before any action
@@ -346,6 +379,15 @@ class Keyboard:
 					
 				else: # release
 					keys_up_time[key_id] = trigger_time
+
+					# detect tap key in a sequence
+					if tap_key_variant > 0:
+						duration = trigger_time - keys_down_time[tap_key_last_id]
+						if duration < tap_delay: # just a tap in a sequence
+							logger.debug("TAP/L/tap/sequence")
+							await self._trigger_tapkey_action_tap(tap_key_last_id, tap_key_variant)
+							tap_key_variant = 0
+
 					action_code = keys_last_action_code[key_id]
 					key_variant = action_code >> 12
 

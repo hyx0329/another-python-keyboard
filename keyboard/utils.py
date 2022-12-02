@@ -2,6 +2,7 @@
 # vim: ts=4 noexpandtab
 
 import supervisor
+import time
 
 
 def is_usb_connected():
@@ -17,6 +18,10 @@ def is_usb_connected():
 
 def do_nothing(*args, **kargs):
 	pass
+
+
+def ms():
+	return time.monotonic_ns() // 1000000 & 0x7FFFFFFF
 
 
 def async_no_fail(func):
