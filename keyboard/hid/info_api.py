@@ -40,5 +40,5 @@ class HIDInfo:
 
     def set_battery_level(self, value: int):
         if self._manager._ble_battery is not None:
-            self._manager._ble_battery.value = max(0, min(100, value))
+            self._manager._ble_battery.level = int(max(0, min(100, value)))
 

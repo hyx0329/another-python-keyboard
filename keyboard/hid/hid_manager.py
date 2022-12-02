@@ -44,7 +44,7 @@ class HIDDeviceManager:
 	def __init__(self, *args,
 				nkro_usb = False,
 				enable_ble = True,
-				ble_battery_report = False,
+				battery = True,
 				**kwargs):
 		self._interfaces = dict()
 		self._nkro_usb = nkro_usb
@@ -65,7 +65,7 @@ class HIDDeviceManager:
 		# initialize interfaces and activate a proper one
 		self.__initialize_usb_interface()
 		if enable_ble and BLE_AVAILABLE:
-			self.__initialize_ble_interface(battery = ble_battery_report)
+			self.__initialize_ble_interface(battery = battery)
 		self.current_interface = self._auto_select_device()
 	
 	def get_all_tasks(self):
@@ -85,11 +85,11 @@ class HIDDeviceManager:
 		# to add a gamepad, need to write a suitable descriptor
 		logger.debug("Initializing BLE HID interface")
 		self._ble_radio = BLERadio()
-		ble_services = list()
 		self._hid_ble_handle = HIDService()
-		self._interfaces["ble"] = wrap_hid_interface(self._hid_ble_handle.devices, self._nkro_ble)
+		ble_services = list()
 		ble_services.append(self._hid_ble_handle)
 		if battery:
+			logger.debug("BLE has battery service")
 			self._ble_battery = BatteryService()
 			self._ble_battery.level = 100
 			ble_services.append(self._ble_battery)
@@ -97,6 +97,7 @@ class HIDDeviceManager:
 		self._ble_advertisement.appearance = 961 # keyboard
 		self._ble_name_prefix = "PYKB" # TODO: better naming?
 		self._ble_id = 1
+		self._interfaces["ble"] = wrap_hid_interface(self._hid_ble_handle.devices, self._nkro_ble)
 
 	def _auto_select_device(self):
 		# Connected USB > BLE > Disconnected USB
@@ -136,7 +137,10 @@ class HIDDeviceManager:
 				# check ble connection
 				if self._ble_radio.connected:
 					self._ble_last_connected_time = time.time()
-					await self.ble_advertisement_stop()
+					# CPY will stop it
+					#await self.ble_advertisement_stop()
+					self._ble_advertisement_started = False
+
 				# auto restart advertisement
 				# not connected doesn't mean it's not trying to connect, so, watchout
 				# here I use `self._ble_advertisement_started` to mark if ble advertisement already started by me

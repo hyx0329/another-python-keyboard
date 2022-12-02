@@ -67,7 +67,7 @@ class Keyboard:
 	def _generate_hid_manager_parameters_from_hardware_spec(self, hardware_spec):
 		params = dict()
 		params["enable_ble"] = hardware_spec & hwspecs.HAS_BLE != 0
-		params["ble_battery"] = hardware_spec & hwspecs.HAS_BATTERY != 0
+		params["battery"] = hardware_spec & hwspecs.HAS_BATTERY != 0
 		return params
 
 	def run(self):
@@ -143,8 +143,9 @@ class Keyboard:
 			logger.info("Manager: Switch to BT {}".format(i))
 			await self.hid_manager.ble_switch_to(i)
 
-	async def _handle_action_macro(self, action_code):
-		pass
+	@async_no_fail
+	async def _handle_action_macro(self, action_code, press):
+		i = action_code & 0xFFF
 
 	async def _handle_action_layer_press(self, action_code):
 		# op<<10|on<<8|part<<5|(bits&0x1f)
@@ -337,7 +338,7 @@ class Keyboard:
 							tap_key_last_id = key_id
 							tap_key_variant = key_variant
 					elif key_variant == ACT_MACRO:
-						await self._handle_action_macro(action_code)
+						await self._handle_action_macro(action_code, press)
 					elif key_variant == ACT_BACKLIGHT:
 						await self._handle_action_backlight(action_code)
 					elif key_variant == ACT_COMMAND:
@@ -403,6 +404,5 @@ class Keyboard:
 							self._layer_mask &= ~layer_mask
 							logger.debug("layer_mask %x" % layer_mask)
 					elif key_variant == ACT_MACRO:
-						pass
-					
+						await self._handle_action_macro(action_code, press)
 
