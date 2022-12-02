@@ -20,7 +20,7 @@ import usb_hid
 try:
 	import _bleio
 	from adafruit_ble import BLERadio
-	#from adafruit_ble.advertising import Advertisement
+	from adafruit_ble.advertising import Advertisement
 	from adafruit_ble.advertising.standard import ProvideServicesAdvertisement
 	from adafruit_ble.services.standard import BatteryService
 	from adafruit_ble.services.standard.hid import HIDService
@@ -56,6 +56,7 @@ class HIDDeviceManager:
 		self._ble_id = 1
 		self._ble_battery = None
 		self._ble_advertisement = None
+		self._ble_advertisement_scan_response = None
 		self._ble_advertisement_started = False
 		self._ble_name_prefix = "PYKB"
 		self._ble_advertise_stop_time = time.time()
@@ -89,7 +90,6 @@ class HIDDeviceManager:
 		# keyboard, mouse, and consumer control (read HIDDevice's doc)
 		# to add a gamepad, need to write a suitable descriptor
 		logger.debug("Initializing BLE HID interface")
-		self._ble_radio = BLERadio()
 		self._hid_ble_handle = HIDService()
 		ble_services = list()
 		ble_services.append(self._hid_ble_handle)
@@ -100,8 +100,13 @@ class HIDDeviceManager:
 			ble_services.append(self._ble_battery)
 		self._ble_advertisement = ProvideServicesAdvertisement(*ble_services)
 		self._ble_advertisement.appearance = 961 # keyboard
+		self._ble_advertisement_scan_response = Advertisement()
 		self._ble_name_prefix = "PYKB" # TODO: better naming?
 		self._ble_id = 1
+		self._ble_radio = BLERadio()
+		if self._ble_radio.connected:
+			for c in self._ble_radio.connections:
+				c.disconnect()
 		self._interfaces["ble"] = wrap_hid_interface(self._hid_ble_handle.devices, self._nkro_ble)
 
 	def _auto_select_device(self):
@@ -139,6 +144,7 @@ class HIDDeviceManager:
 				if self._ble_radio.advertising:
 					if time.time() > self._ble_advertise_stop_time:
 						await self.ble_advertisement_stop()
+						await asyncio.sleep(1)
 				# check ble connection
 				if self._ble_radio.connected:
 					self._ble_last_connected_time = time.time()
@@ -244,7 +250,7 @@ class HIDDeviceManager:
 		self._ble_advertise_stop_time = time.time() + max(10, timeout)
 		if not self._ble_radio.advertising:
 			logger.debug("Starting BLE advertisement")
-			self._ble_radio.start_advertising(self._ble_advertisement)
+			self._ble_radio.start_advertising(self._ble_advertisement, self._ble_advertisement_scan_response)
 
 	async def ble_advertisement_stop(self):
 		self._ble_advertisement_started = False
