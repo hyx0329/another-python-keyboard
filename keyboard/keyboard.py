@@ -7,6 +7,7 @@ import struct
 import microcontroller
 import asyncio
 import adafruit_logging as logging
+
 logger = logging.getLogger("Keyboard Core")
 logger.setLevel(logging.DEBUG)
 
@@ -16,15 +17,22 @@ from .hid import HIDDeviceManager, HIDInfo
 from .macro_interface import MacroInterface
 import keyboard.hardware_spec_ids as hwspecs
 
+
 class Keyboard:
 	# TODO: add pair key
 	# TODO: add macro
 	
-	def __init__(self, *args, nkro_usb = False, **kwargs):
+	def __init__(self, *args,
+			  nkro_usb = False,
+			  verbose = False,
+			  time_tap_thresh = 170,
+			  time_tap_delay = 80,
+			  **kwargs):
 		self.hardware = None
 		self.hardware_spec = 0
 		self.hid_manager = None
 		self.nkro_usb = nkro_usb
+		self.verbose = verbose
 		self._keymap = None
 		self._heatmap = None # TODO: load heatmap?
 		self._profiles = {}  # profile auto switching is not supported yet
@@ -33,18 +41,23 @@ class Keyboard:
 		self._default_actionmap = None
 		self._layer_mask = 1
 		self._macro_handler = None
-		self._tap_thresh = 170 # micro second
-		self._tap_delay = 80 # micro second
+		self._tap_thresh = time_tap_thresh # micro second
+		self._tap_delay = time_tap_delay # micro second
 		self.keys_last_action_code = None
 		self.keys_down_time = None
 		self.keys_up_time = None
+
+		if not verbose:
+			logger.setLevel(logging.ERROR)
+		else:
+			logger.setLevel(logging.DEBUG)
 
 	def initialize(self):
 		# check then setup basics
 		logger.debug("Initializing the hardware and hid_manager")
 		self._check_hardware_api(self.hardware)
 		params = self._generate_hid_manager_parameters_from_hardware_spec(self.hardware.hardware_spec)
-		self.hid_manager = HIDDeviceManager(nkro_usb = self.nkro_usb, *params)
+		self.hid_manager = HIDDeviceManager(nkro_usb = self.nkro_usb, verbose = self.verbose, *params)
 		hid_info = HIDInfo(self.hid_manager)
 		self.hardware.register_hid_info(hid_info)
 		# initialize shared memory

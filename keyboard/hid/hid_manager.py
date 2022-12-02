@@ -45,6 +45,7 @@ class HIDDeviceManager:
 				nkro_usb = False,
 				enable_ble = True,
 				battery = True,
+				verbose = False,
 				**kwargs):
 		self._interfaces = dict()
 		self._nkro_usb = nkro_usb
@@ -67,6 +68,10 @@ class HIDDeviceManager:
 		if enable_ble and BLE_AVAILABLE:
 			self.__initialize_ble_interface(battery = battery)
 		self.current_interface = self._auto_select_device()
+		if not verbose:
+			logger.setLevel(logging.ERROR)
+		else:
+			logger.setLevel(logging.DEBUG)
 	
 	def get_all_tasks(self):
 		# get tasks to run
