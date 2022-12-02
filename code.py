@@ -16,7 +16,7 @@ keymap_norman = keymaps['norman']
 
 ## initialize keyboard
 keyboard = Keyboard(nkro_usb = NKRO)
-keyboard.register_hardware(m60)
+keyboard.register_hardware(m60.KeyboardHardware)
 keyboard.register_keymap(default_keymap)
 
 ## start

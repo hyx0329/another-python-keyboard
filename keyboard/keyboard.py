@@ -21,7 +21,6 @@ class Keyboard:
 	
 	def __init__(self, *args, nkro_usb = False, **kwargs):
 		self.hardware = None
-		self._hardware_module = None
 		self.hardware_spec = 0
 		self.hid_manager = None
 		self.nkro_usb = nkro_usb
@@ -55,14 +54,14 @@ class Keyboard:
 		self.keys_up_time = [0] * self.hardware.key_count
 	
 	def _check_hardware_api(self, hardware):
-		assert hasattr(self.hardware, "get_all_tasks")
-		assert hasattr(self.hardware, "get_keys")
-		assert hasattr(self.hardware, "hardware_spec")
-		assert hasattr(self.hardware, "key_name")
-		assert hasattr(self.hardware, "key_count")
-		assert hasattr(self.hardware, "suspend")
-		assert hasattr(self.hardware, "register_hid_info")
-		iter(self.hardware)  # hardware should be iterable ( to get key events )
+		assert hasattr(hardware, "get_all_tasks")
+		assert hasattr(hardware, "get_keys")
+		assert hasattr(hardware, "hardware_spec")
+		assert hasattr(hardware, "key_name")
+		assert hasattr(hardware, "key_count")
+		assert hasattr(hardware, "suspend")
+		assert hasattr(hardware, "register_hid_info")
+		iter(hardware)  # hardware should be iterable ( to get key events )
 	
 	def _generate_hid_manager_parameters_from_hardware_spec(self, hardware_spec):
 		params = dict()
@@ -89,9 +88,10 @@ class Keyboard:
 		tasks.append(asyncio.create_task(self._main_routine()))
 		return tasks
 
-	def register_hardware(self, hardware_module):
-		self._hardware_module = hardware_module
-		self.hardware = hardware_module.KeyboardHardware()
+	def register_hardware(self, keyboard_hardware):
+		hardware = keyboard_hardware()
+		self._check_hardware_api(hardware)
+		self.hardware = hardware
 
 	def register_keymap(self, keymap):
 		self._keymap = keymap
