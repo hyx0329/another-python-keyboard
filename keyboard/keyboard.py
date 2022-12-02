@@ -34,6 +34,7 @@ class Keyboard:
 		self._layer_mask = 1
 		self._macro_handler = None
 		self._tap_thresh = 170 # micro second
+		self._tap_delay = 80 # micro second
 		self.keys_last_action_code = None
 		self.keys_down_time = None
 		self.keys_up_time = None
@@ -259,14 +260,14 @@ class Keyboard:
 		# --+-------+-------+-------+------> t
 		#           |  dt1  |
 		#         dt1 < tap_delay
-		tap_delay = 65 # ms
+		tap_delay = self._tap_delay
 		# to further impove fast typing, add another check
 		# Fast Typing - B is a tap-key
 		#   B↓      C↓      B↑      C↑
 		# --+-------+-------+-------+------> t
 		#   |  dt1  |  dt2  |
 		# dt1 < tap_delay && dt2 < fast_type_thresh
-		# but I'm not going to implement it, as it breaks the first scenario and makes things complicated
+		# comparing dt2 and fast_type_thresh is not implemented
 
 
 		# for auto suspend, like a watch dog
@@ -315,9 +316,15 @@ class Keyboard:
 					# trigger tapkey `hold` action when key down events detected
 					# This will alter self._layer_mask thus affect action_code
 					if tap_key_variant > 0:
-						logger.debug("TAP/L/hold/newpress")
-						await self._trigger_tapkey_action_hold(tap_key_last_id, tap_key_variant)
-						tap_key_variant = 0
+						if duration < tap_delay: # quick typing
+							# TODO: better checking
+							logger.debug("TAP/L/tap/sequence")
+							await self._trigger_tapkey_action_tap(tap_key_last_id, tap_key_variant)
+							tap_key_variant = 0
+						else:
+							logger.debug("TAP/L/hold/newpress")
+							await self._trigger_tapkey_action_hold(tap_key_last_id, tap_key_variant)
+							tap_key_variant = 0
 
 					# get action
 					action_code = self._get_action_code(key_id)
