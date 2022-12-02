@@ -1,5 +1,5 @@
 # -*- encoding: utf-8 -*-
-# vim: set ts=4 noexpandtab
+# vim: ts=4 noexpandtab
 from ..utils import is_usb_connected
 
 class HIDInfo:
