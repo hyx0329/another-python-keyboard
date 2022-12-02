@@ -21,13 +21,13 @@ def do_nothing(*args, **kargs):
 
 def async_no_fail(func):
 	# for async functions
-	async def safed_func(*args, **kwargs):
+	async def saved_func(*args, **kwargs):
 		try:
 			return await func(*args, **kwargs)
 		except Exception as e:
 			print(e)
 		return None
-	return safed_func
+	return saved_func
 
 
 class LightQueue:
