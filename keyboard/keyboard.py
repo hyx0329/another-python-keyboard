@@ -10,9 +10,10 @@ import adafruit_logging as logging
 logger = logging.getLogger("Keyboard Core")
 logger.setLevel(logging.DEBUG)
 
-from .utils import do_nothing, async_no_fail, ms
+from .utils import async_no_fail, ms
 from .action_code import *
 from .hid import HIDDeviceManager, HIDInfo
+from .macro_interface import MacroInterface
 import keyboard.hardware_spec_ids as hwspecs
 
 class Keyboard:
@@ -31,7 +32,7 @@ class Keyboard:
 		self._actionmaps = None
 		self._default_actionmap = None
 		self._layer_mask = 1
-		self._macro_handler = do_nothing
+		self._macro_handler = None
 		self._tap_thresh = 170 # micro second
 		self.keys_last_action_code = None
 		self.keys_down_time = None
@@ -108,7 +109,6 @@ class Keyboard:
 		#	)
 
 	def register_macro_handler(self, func):
-		# TODO: better checking
 		if callable(func):
 			self._macro_handler = func
 
@@ -121,7 +121,7 @@ class Keyboard:
 				if code == 1:  # TRANSPARENT
 					continue
 				return code
-		return 0
+		return 0 # no action
 
 	async def _handle_action_command(self, action_code):
 		if action_code == BOOTLOADER:
@@ -145,7 +145,14 @@ class Keyboard:
 
 	@async_no_fail
 	async def _handle_action_macro(self, action_code, press):
+		if self._macro_handler is None:
+			return
+		macro_interface = MacroInterface(
+				keyboard_core = self,
+				hid_manager = self.hid_manager,
+				keyboard_hardware = self.hardware)
 		i = action_code & 0xFFF
+		await self._macro_handler(macro_interface, i, press)
 
 	async def _handle_action_layer_press(self, action_code):
 		# op<<10|on<<8|part<<5|(bits&0x1f)
