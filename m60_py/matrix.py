@@ -4,7 +4,6 @@
 import asyncio
 import digitalio
 import board
-from keyboard.utils import timed_function
 
 class Matrix:
 	# only one instance anyway
@@ -62,10 +61,6 @@ class Matrix:
 			await asyncio.sleep(0)
 
 	async def get_raw_keys(self):
-		return self._get_raw_keys()
-
-	@timed_function
-	def _get_raw_keys(self):
 		# get current key status
 		# key up/down events are not generated here
 		key_val = self.key_val

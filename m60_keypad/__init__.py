@@ -3,8 +3,8 @@
 
 import asyncio
 import keypad
+import time
 
-from .matrix import Matrix
 from .bsm import (
 	MATRIX_COLS,
 	MATRIX_ROWS,
@@ -41,14 +41,14 @@ class KeyboardHardware:
 	def __init__(self):
 		self._keypad = keypad.KeyMatrix(MATRIX_ROWS, MATRIX_COLS,
 								  columns_to_anodes = not MATRIX_ROW2COL)
-		self._battery_update_callback = lambda x: None
 		self.key_name = key_name
+		self.backlight = Backlight()
 		self._key_count = self._keypad.key_count
 		self._key_events_length = 0
 		self._key_events = [0] * self._key_count
 		self._key_events_head = 0
 		self._key_events_tail = 0
-		self._battery_update_callback = lambda x: None
+		self._hid_info = None
 
 	def _put(self, value):
 		if self._key_events_length < self._key_count:
@@ -93,11 +93,15 @@ class KeyboardHardware:
 		# return a list of tasks
 		tasks = list()
 		tasks.append(asyncio.create_task(self._scan_routine()))
+		tasks.append(asyncio.create_task(self._backlight_routine()))
 		return tasks
+
+	def register_hid_info(self, hid_info):
+		self._hid_info = hid_info
 
 	async def _scan_routine(self):
 		while True:
-			event = self._keypad.events.get()
+			event = self._keypad.events.get() # is there a non-blocking API?
 			if event is not None:
 				key_number = event.key_number
 				pressed = 0x00 if event.pressed else 0x80
@@ -105,8 +109,33 @@ class KeyboardHardware:
 				self._put(encoded_event)
 				await asyncio.sleep(0)
 
-	async def _led_routine(self):
-		raise NotImplemented
+	async def _backlight_routine(self):
+		# because the scan will block every coroutine, I decided to not enable the fancy
+		# backlight in this implementation(not calling backlight.check()).
+		hid_info = self._hid_info
+		backlight = self.backlight
+		battery_update_time = time.time()
+
+		if hid_info is None:
+			return
+
+		while True:
+			await asyncio.sleep(0)
+			# ble led
+			if hid_info.ble_advertising:
+				backlight.set_bt_led(self._hid_info.ble_id)
+			else:
+				backlight.set_bt_led(None)
+
+			# hid led
+			backlight.set_hid_leds(hid_info.keyboard_led)
+
+			# battery level, in a backlight coroutine hahaha(not that good)
+			if time.time() > battery_update_time:
+				hid_info.set_battery_level(battery_level())
+				battery_update_time = time.time() + 300  # update every 5 min
+
+			backlight.check()
 
 	async def get_keys(self):
 		# get key events count
@@ -126,12 +155,6 @@ class KeyboardHardware:
 	def key_count(self):
 		return self._key_count
 
-	async def get_battery_level(self):
-		return battery_level()
-
-	async def set_keyboard_led(self):
-		pass
-	
-	async def set_gamepad_led(self):
-		pass
+	async def suspend(self):
+		return 0
 

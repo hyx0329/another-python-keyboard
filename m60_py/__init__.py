@@ -2,6 +2,7 @@
 # vim: ts=4 noexpandtab
 
 import asyncio
+import time
 
 from .matrix import Matrix
 from .bsm import (
@@ -12,6 +13,8 @@ from .bsm import (
 	battery_level,
 	Backlight,
 )
+
+from .light_queue import LightQueue
 
 Matrix.COLS = MATRIX_COLS
 Matrix.ROWS = MATRIX_ROWS
@@ -33,6 +36,25 @@ def key_name(key):
 	return KEY_NAME[key]
 
 
+def ms():
+	return (time.monotonic_ns() // 1000000) & 0x7FFFFFFF
+
+
+class KeyEventIterator:
+	def __init__(self, hw, queue):
+		self._hw_iter = hw
+		self._queue = queue
+	
+	def __next__(self):
+		# convert the event's key ID to location on the keymap
+		# inner iterator will raise the StopIteration
+		# also triggers hardware's key handler
+		event = next(self._hw_iter)
+		self._queue.put(event)
+		event = COORDS[event & 0x7F] | (event & 0x80)
+		return event
+
+
 class KeyboardHardware:
 	# minimum APIs:
 	#  get_all_tasks()
@@ -43,17 +65,17 @@ class KeyboardHardware:
 
 	def __init__(self):
 		self._matrix = Matrix()
+		self.backlight = Backlight()
+		self.key_name = key_name
+		self.queue = LightQueue(self._matrix.key_count)
+		self._hid_info = None
 		self._key_mask = 0
 		self._key_count = self._matrix.key_count
 		self._key_events_length = 0
 		self._key_events = [0] * self._key_count
 		self._key_events_head = 0
 		self._key_events_tail = 0
-		self._battery_update_callback = lambda x: None
-		self.key_name = key_name
-		# for ease of use, but don't call in parent modules
-		self.get_raw_keys = self._matrix.get_raw_keys
-	
+
 	def _put(self, value):
 		if self._key_events_length < self._key_count:
 			self._key_events[self._key_events_tail] = value
@@ -87,16 +109,57 @@ class KeyboardHardware:
 			raise IndexError
 
 	def __iter__(self):
-		return self
+		return KeyEventIterator(self, self.queue)
 
 	def get_all_tasks(self):
 		# return a list of tasks
 		tasks = list()
 		tasks.append(asyncio.create_task(self._matrix.scan_routine()))
+		tasks.append(asyncio.create_task(self._backlight_routine()))
 		return tasks
 
-	async def _led_routine(self):
-		raise NotImplemented
+	def register_hid_info(self, hid_info):
+		self._hid_info = hid_info
+
+	async def _backlight_routine(self):
+		hid_info = self._hid_info
+		backlight = self.backlight
+		battery_update_time = time.time()
+		led_check_counter = 1
+		led_check_thresh = 1 << 8
+
+		if hid_info is None:
+			return
+
+		while True:
+			await asyncio.sleep(0)
+			# ble led
+			if hid_info.ble_advertising:
+				backlight.set_bt_led(self._hid_info.ble_id)
+			else:
+				backlight.set_bt_led(None)
+
+			# hid led
+			backlight.set_hid_leds(hid_info.keyboard_led)
+
+			# battery level, in a backlight coroutine hahaha(not that good)
+			if time.time() > battery_update_time:
+				hid_info.set_battery_level(battery_level())
+				battery_update_time = time.time() + 300  # update every 5 min
+
+			# for a special backlight mode
+			for event in self.queue:
+				key = event & 0x7F
+				pressed = event & 0x80 == 0
+				backlight.handle_key(key, pressed)
+
+			if led_check_counter > led_check_thresh:
+				backlight.check() # high CPU usage
+				led_check_counter = 1
+			else:
+				led_check_counter <<= 1
+
+			backlight.update()
 
 	async def get_keys(self):
 		# generate key events and return events count
@@ -105,7 +168,7 @@ class KeyboardHardware:
 		# here we convert the raw ID to the position in the Keymap
 		# note the key ID should not exceed 0x7F(127), which should be sufficient
 		old_mask = self._key_mask
-		new_mask = await self.get_raw_keys()
+		new_mask = await self._matrix.get_raw_keys()
 		self._key_mask = new_mask
 		for raw_key_id in range(self._key_count):
 			imask = 1 << raw_key_id
@@ -114,9 +177,9 @@ class KeyboardHardware:
 			up = old_status > new_status
 			down = old_status < new_status
 			if up: # released
-				self._put( 0x80 | COORDS[raw_key_id] )
+				self._put( 0x80 | raw_key_id )
 			elif down: # pressed
-				self._put( COORDS[raw_key_id] )
+				self._put( raw_key_id )
 			# otherwise no change
 		return self.__len__()
 
@@ -130,12 +193,6 @@ class KeyboardHardware:
 	def key_count(self):
 		return self._key_count
 
-	async def get_battery_level(self):
-		return battery_level()
-
-	async def set_keyboard_led(self):
-		pass
-	
-	async def set_gamepad_led(self):
-		pass
+	async def suspend(self):
+		return 0
 

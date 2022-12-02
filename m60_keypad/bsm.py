@@ -338,7 +338,7 @@ class Backlight:
 			v = 10
 		if v is not None:
 			self.dev.set_mode(v, 2)
-		if self._bt_led is not None:
+		if self._bt_led is not None and self._bt_led != v:
 			self.dev.set_mode(self._bt_led, 0)
 		self._bt_led = v
 
