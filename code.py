@@ -43,7 +43,7 @@ async def macro_handler(dev, i, press):
 			dev.keyboard_core.register_keymap(default_keymap)
 		elif i == 1:
 			print("Switching to QWERTY_PLAIN")
-			dev.keyboard_core.register_keymap(keymap_plain)
+			dev.keyboard_core.register_keymap(keymap_qwerty_plain)
 		elif i == 2:
 			await dev.send_text("Hello Python Keyboard!")
 		else:
