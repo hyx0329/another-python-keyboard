@@ -1,0 +1,1101 @@
+From 22592e456d7c36c86ac83502de6cb994575356ed Mon Sep 17 00:00:00 2001
+From: hyx0329 <hyx0329@163.com>
+Date: Tue, 29 Nov 2022 23:02:01 +0800
+Subject: [PATCH 2/2] add matrix2 module
+
+---
+ .../makerdiary_m60_keyboard/mpconfigboard.mk  |   1 +
+ ports/nrf/common-hal/matrix2/Matrix2.c        | 304 +++++++++++++
+ ports/nrf/common-hal/matrix2/Matrix2.h        |  47 ++
+ ports/nrf/common-hal/matrix2/__init__.c       |  27 ++
+ ports/nrf/common-hal/matrix2/__init__.h       |  32 ++
+ py/circuitpy_defns.mk                         |   5 +
+ py/circuitpy_mpconfig.mk                      |   3 +
+ shared-bindings/matrix2/Matrix2.c             | 410 ++++++++++++++++++
+ shared-bindings/matrix2/Matrix2.h             |  56 +++
+ shared-bindings/matrix2/__init__.c            |  63 +++
+ shared-bindings/matrix2/__init__.h            |  34 ++
+ 11 files changed, 982 insertions(+)
+ create mode 100644 ports/nrf/common-hal/matrix2/Matrix2.c
+ create mode 100644 ports/nrf/common-hal/matrix2/Matrix2.h
+ create mode 100644 ports/nrf/common-hal/matrix2/__init__.c
+ create mode 100644 ports/nrf/common-hal/matrix2/__init__.h
+ create mode 100644 shared-bindings/matrix2/Matrix2.c
+ create mode 100644 shared-bindings/matrix2/Matrix2.h
+ create mode 100644 shared-bindings/matrix2/__init__.c
+ create mode 100644 shared-bindings/matrix2/__init__.h
+
+diff --git a/ports/nrf/boards/makerdiary_m60_keyboard/mpconfigboard.mk b/ports/nrf/boards/makerdiary_m60_keyboard/mpconfigboard.mk
+index 5371b6fff..5083b1254 100644
+--- a/ports/nrf/boards/makerdiary_m60_keyboard/mpconfigboard.mk
++++ b/ports/nrf/boards/makerdiary_m60_keyboard/mpconfigboard.mk
+@@ -10,6 +10,7 @@ EXTERNAL_FLASH_DEVICES = "MX25R6435F"
+ 
+ CIRCUITPY_ENABLE_MPY_NATIVE = 1
+ 
++CIRCUITPY_MATRIX2 = 1
+ CIRCUITPY_PULSEIO = 0 					# GPIOTE
+ CIRCUITPY_NEOPIXEL_WRITE = 0
+ CIRCUITPY_GAMEPAD = 0
+diff --git a/ports/nrf/common-hal/matrix2/Matrix2.c b/ports/nrf/common-hal/matrix2/Matrix2.c
+new file mode 100644
+index 000000000..29683adda
+--- /dev/null
++++ b/ports/nrf/common-hal/matrix2/Matrix2.c
+@@ -0,0 +1,304 @@
++/*
++ * This file is part of the CircuitPython project, https://github.com/adafruit/circuitpython
++ *
++ * The MIT License (MIT)
++ *
++ * Copyright (c) 2022 HuangYunXuan
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#include "py/gc.h"
++#include "py/runtime.h"
++#include "supervisor/port.h"
++
++#include "nrfx.h"
++#include "nrfx_gpiote.h"
++#include "nrf_qspi.h"
++
++#include "common-hal/matrix2/Matrix2.h"
++#include "shared-bindings/matrix2/Matrix2.h"
++#include "shared-bindings/digitalio/DigitalInOut.h"
++#include "shared-bindings/time/__init__.h"
++
++// for suspend, device-specific configuration
++// TODO: work it around
++#define MATRIX_ROWS 8
++#define MATRIX_COLS 8
++static uint8_t row_io[MATRIX_ROWS] = {5, 6, 7, 8, 41, 40, 12, 11};
++static uint8_t col_io[MATRIX_COLS] = {19, 20, 21, 22, 23, 24, 25, 26};
++static void setup_pins_for_suspend(void);
++void matrix2_interrupt_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action);
++
++// some small utilities
++static mp_uint_t row_column_to_key_number(matrix2_matrix2_obj_t *self, mp_uint_t row, mp_uint_t column) {
++    return row * self->column_digitalinouts->len + column;
++}
++
++// initialize the matrix2 instance
++void common_hal_matrix2_matrix2_construct(matrix2_matrix2_obj_t *self, mp_uint_t num_row_pins,
++const mcu_pin_obj_t *row_pins[], mp_uint_t num_column_pins, const mcu_pin_obj_t *column_pins[],
++bool columns_to_anodes, size_t max_events,
++size_t max_bit_count, size_t active_bit_count, size_t inactive_bit_count) {
++    // row pin initialization
++    mp_obj_t row_dios[num_row_pins];
++    for (size_t row = 0; row < num_row_pins; row++) {
++        digitalio_digitalinout_obj_t *dio = m_new_obj(digitalio_digitalinout_obj_t);
++        dio->base.type = &digitalio_digitalinout_type;
++        common_hal_digitalio_digitalinout_construct(dio, row_pins[row]);
++        common_hal_digitalio_digitalinout_switch_to_input(dio, columns_to_anodes ? PULL_UP : PULL_DOWN);
++        row_dios[row] = dio;
++    }
++    self->row_digitalinouts = mp_obj_new_tuple(num_row_pins, row_dios);
++
++    // col pin initialization
++    mp_obj_t column_dios[num_column_pins];
++    for (size_t column = 0; column < num_column_pins; column++) {
++        digitalio_digitalinout_obj_t *dio = m_new_obj(digitalio_digitalinout_obj_t);
++        dio->base.type = &digitalio_digitalinout_type;
++        common_hal_digitalio_digitalinout_construct(dio, column_pins[column]);
++        common_hal_digitalio_digitalinout_switch_to_input(dio, columns_to_anodes ? PULL_UP : PULL_DOWN);
++        column_dios[column] = dio;
++    }
++    self->column_digitalinouts = mp_obj_new_tuple(num_column_pins, column_dios);
++
++    // key count, but not necessarily the actual count, here we pick the maximum possible count
++    self->key_count = num_row_pins * num_column_pins;
++
++    // allocate space to mark pins' scanning status
++    self->key_values = (uint16_t *)gc_alloc(sizeof(uint16_t) * self->key_count, false, false);
++    // allocate space to mark pins' present and current status
++    self->previously_pressed = (bool *)gc_alloc(sizeof(bool) * self->key_count, false, false);
++    // self->currently_pressed = (bool *)gc_alloc(sizeof(bool) * self->key_count, false, false);
++
++    // store variables
++    self->columns_to_anodes = columns_to_anodes;
++    self->max_bit_count = max_bit_count;
++    self->active_bit_count = active_bit_count;
++    self->inactive_bit_count = inactive_bit_count;
++
++    // setup ringbuf for key events
++    // BTW each event is an 8-bit number, 0x80 means released, the rest are for key_id,
++    // which should be sufficient on a regular 108-key keyboard
++    // anyway the M60 keyboard only has 60 keys
++    ringbuf_alloc(&self->encoded_events, max_events * (sizeof(uint8_t)), false);
++}
++
++// deinitialize the matrix2 instance
++void common_hal_matrix2_matrix2_deinit(matrix2_matrix2_obj_t *self) {
++    if (common_hal_matrix2_matrix2_deinited(self)) {
++        return;
++    }
++
++    // reset the pins
++    for (size_t row = 0; row < common_hal_matrix2_matrix2_get_row_count(self); row++) {
++        common_hal_digitalio_digitalinout_deinit(self->row_digitalinouts->items[row]);
++    }
++    self->row_digitalinouts = MP_ROM_NONE;
++
++    for (size_t column = 0; column < common_hal_matrix2_matrix2_get_column_count(self); column++) {
++        common_hal_digitalio_digitalinout_deinit(self->column_digitalinouts->items[column]);
++    }
++    self->column_digitalinouts = MP_ROM_NONE;
++
++    // deallocate the lists and queue
++    // however they are managed by gc
++    // gc_free(self->previously_pressed);
++    // gc_free(self->currently_pressed);
++    // ringbuf_free(&self->encoded_events);
++    self->key_count = 0;
++}
++
++bool common_hal_matrix2_matrix2_deinited(void *self_in) {
++    matrix2_matrix2_obj_t *self = self_in;
++    return self->key_count == 0;
++}
++
++size_t common_hal_matrix2_matrix2_get_row_count(matrix2_matrix2_obj_t *self) {
++    return self->row_digitalinouts->len;
++}
++
++size_t common_hal_matrix2_matrix2_get_column_count(matrix2_matrix2_obj_t *self) {
++    return self->column_digitalinouts->len;
++}
++
++// scan once
++void common_hal_matrix2_matrix2_scan(matrix2_matrix2_obj_t *self) {
++    // the key events are not generated here,
++    // for consistency, events are generated on request
++    // scan and update values only
++
++    // generate the bit mask, will limit the max value of the key debouncing status
++    const mp_uint_t max_bit_mask = ( 1 << self->max_bit_count ) - 1;
++
++    // copy a lot from `keymatrix_scan_now`
++
++    // On entry, all pins are inputs with pulls(up or down depends on diode orientation)
++    for (size_t row = 0; row < common_hal_matrix2_matrix2_get_row_count(self); row++) {
++        // switch this row to output, low if columns_to_anodes is true, else set high.
++        digitalio_digitalinout_obj_t *row_dio = self->row_digitalinouts->items[row];
++        common_hal_digitalio_digitalinout_switch_to_output(
++            row_dio, !self->columns_to_anodes, DRIVE_MODE_PUSH_PULL);
++
++        // scan each column
++        for (size_t column = 0; column < common_hal_matrix2_matrix2_get_column_count(self); column++) {
++            mp_uint_t key_number = row_column_to_key_number(self, row, column);
++
++            // Get the current state, by reading whether the column got pulled to the row value or not.
++            // If low and columns_to_anodes is true, the key is pressed.
++            // If high and columns_to_anodes is false, the key is pressed.
++            const bool is_pressed =
++                common_hal_digitalio_digitalinout_get_value(self->column_digitalinouts->items[column]) !=
++                self->columns_to_anodes;
++
++            // here using the bit mask to assist debouncing
++            if (is_pressed) {
++                // left shift one bit
++                self->key_values[key_number] =
++                    ((self->key_values[key_number] << 1) | 1) & max_bit_mask;
++            } else {
++                self->key_values[key_number] >>= 1;
++            }
++        }
++
++        // Done with this row. Set its pin to its resting pull value briefly to shorten the time it takes
++        // to switch values. Just switching to an input with a (relatively weak) pullup/pulldown
++        // causes a slight delay in the output changing, which can cause false readings.
++        common_hal_digitalio_digitalinout_set_value(row_dio, self->columns_to_anodes);
++        // Switch the row back to an input, pulled appropriately
++        common_hal_digitalio_digitalinout_switch_to_input(
++            row_dio, self->columns_to_anodes ? PULL_UP : PULL_DOWN);
++    }
++}
++
++// generate events, return event count
++int common_hal_matrix2_matrix2_generate_events(matrix2_matrix2_obj_t *self) {
++    mp_uint_t active_mask = ( 1 << self->active_bit_count ) - 1;
++    mp_uint_t inactive_mask = ( 1 << self->inactive_bit_count ) - 1;
++    for (size_t key_number = 0; key_number < self->key_count; key_number++) {
++        const bool previous_status = self->previously_pressed[key_number];
++        const uint16_t current_value = self->key_values[key_number];
++        if (current_value > active_mask && !previous_status) {
++            // key relatively pressed
++            // set state to true(pressed)
++            // generate key `down` event
++            self->previously_pressed[key_number] = true;
++            ringbuf_put(&self->encoded_events, (uint8_t)(key_number & 0x7F));
++        } else if (current_value < inactive_mask && previous_status) {
++            // key relatively released
++            // set state to false(released)
++            // generate key `up` event
++            self->previously_pressed[key_number] = false;
++            ringbuf_put(&self->encoded_events, (uint8_t)((key_number & 0x7F) | 0x80));
++        }
++    }
++
++    // each event is a byte so here is equal
++    return ringbuf_num_filled(&self->encoded_events);
++}
++
++// put the keyboard to sleep mode
++// return status:
++// 0: okay or ignored, expected, should be no error
++// -1: timeout waiting for all keys released
++int common_hal_matrix2_matrix2_suspend(matrix2_matrix2_obj_t *self) {
++    // When USB is connected, do not suspend
++    // what about to use supervisor_runtime_get_usb_connected?
++    if (NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk) {
++        return 0;
++    }
++
++    // turn off rgb matrix, pin is predefined
++    nrf_gpio_cfg_default(36);
++
++    //// make sure keys are released
++    // enable all rows
++    for (size_t row = 0; row < common_hal_matrix2_matrix2_get_row_count(self); row++) {
++        digitalio_digitalinout_obj_t *row_dio = self->row_digitalinouts->items[row];
++        common_hal_digitalio_digitalinout_switch_to_output(
++            row_dio, !self->columns_to_anodes, DRIVE_MODE_PUSH_PULL);
++    }
++    // scan until all released
++    uint16_t press_record = 0;
++    do {
++        // count++;
++        bool has_press = false;
++        for (size_t column = 0; column < common_hal_matrix2_matrix2_get_column_count(self); column++) {
++            const bool is_pressed =
++                common_hal_digitalio_digitalinout_get_value(self->column_digitalinouts->items[column]) !=
++                self->columns_to_anodes;
++            has_press |= is_pressed;
++        }
++        if (!has_press) {
++            press_record = (press_record << 1) | 1;
++        } else {
++            press_record >>= 1;
++        }
++    } while (press_record < 0x8);
++
++    // deinit the matrix(pins)
++    common_hal_matrix2_matrix2_deinit(self);
++
++    // setup pins
++    setup_pins_for_suspend();
++
++#if defined(MICROPY_QSPI_SCK)
++    if (NRF_QSPI->ENABLE) {
++        // csn-pins = <45> - keep CS high when QSPI is disabled
++        NRF_P1->OUTSET = 1 << 13;
++        NRF_P1->PIN_CNF[13] = 3;
++
++        *(volatile uint32_t *)0x40029010 = 1;
++        *(volatile uint32_t *)0x40029054 = 1;
++        NRF_QSPI->ENABLE = 0;
++    }
++#endif
++
++    NRF_POWER->GPREGRET = 0xFB;     // Fast Boot
++    NRF_POWER->SYSTEMOFF = 1;
++    NRFX_DELAY_US(10);
++    NVIC_SystemReset();
++    return 0;
++}
++
++static void setup_pins_for_suspend(void) {
++    // rows
++    for (int i = 0; i < MATRIX_ROWS; i++)
++    {
++        nrf_gpio_cfg_output(row_io[i]);
++        nrf_gpio_pin_write(row_io[i], 0); // set low
++    }
++    // columns
++    nrfx_gpiote_in_config_t config = NRFX_GPIOTE_CONFIG_IN_SENSE_HITOLO(false);
++    config.pull = NRF_GPIO_PIN_PULLUP; // pull up
++    if ( !nrfx_gpiote_is_init() ) {
++        nrfx_gpiote_init(NRFX_GPIOTE_CONFIG_IRQ_PRIORITY);
++    }
++    for (int i = 0; i < MATRIX_COLS; i++)
++    {
++        nrfx_gpiote_in_init(col_io[i], &config, matrix2_interrupt_handler);
++    }
++    // enable interrupt
++    for (int i = 0; i < MATRIX_COLS; i++)
++    {
++        nrfx_gpiote_in_event_enable(col_io[i], true);
++    }
++}
++
++void matrix2_interrupt_handler(nrfx_gpiote_pin_t pin, nrf_gpiote_polarity_t action){}
+diff --git a/ports/nrf/common-hal/matrix2/Matrix2.h b/ports/nrf/common-hal/matrix2/Matrix2.h
+new file mode 100644
+index 000000000..1560ca55c
+--- /dev/null
++++ b/ports/nrf/common-hal/matrix2/Matrix2.h
+@@ -0,0 +1,47 @@
++/*
++ * This file is part of the CircuitPython project, https://github.com/adafruit/circuitpython
++ *
++ * The MIT License (MIT)
++ *
++ * Copyright (c) 2022 HuangYunXuan
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#ifndef COMMON_HAL_MATRIX2_MATRIX2_H
++#define COMMON_HAL_MATRIX2_MATRIX2_H
++
++#include "shared-bindings/matrix2/Matrix2.h"
++#include "shared-bindings/microcontroller/Pin.h"
++
++void common_hal_matrix2_matrix2_construct(matrix2_matrix2_obj_t *self, mp_uint_t num_row_pins,
++const mcu_pin_obj_t *row_pins[], mp_uint_t num_column_pins, const mcu_pin_obj_t *column_pins[],
++bool columns_to_anodes, size_t max_events,
++size_t max_bit_count, size_t active_bit_count, size_t inactive_bit_count);
++
++void common_hal_matrix2_matrix2_deinit(matrix2_matrix2_obj_t *self); // deinit all pin, child objects
++void common_hal_matrix2_matrix2_scan(matrix2_matrix2_obj_t *self); // scan once
++int common_hal_matrix2_matrix2_generate_events(matrix2_matrix2_obj_t *self); // generate events, return event count
++int common_hal_matrix2_matrix2_suspend(matrix2_matrix2_obj_t *self); // put the keyboard to sleep mode
++
++bool common_hal_matrix2_matrix2_deinited(void *self_in);
++size_t common_hal_matrix2_matrix2_get_column_count(matrix2_matrix2_obj_t *self);
++size_t common_hal_matrix2_matrix2_get_row_count(matrix2_matrix2_obj_t *self);
++
++#endif // COMMON_HAL_MATRIX2_MATRIX2_H
+diff --git a/ports/nrf/common-hal/matrix2/__init__.c b/ports/nrf/common-hal/matrix2/__init__.c
+new file mode 100644
+index 000000000..780aab910
+--- /dev/null
++++ b/ports/nrf/common-hal/matrix2/__init__.c
+@@ -0,0 +1,27 @@
++/*
++ * This file is part of the CircuitPython project, https://github.com/adafruit/circuitpython
++ *
++ * The MIT License (MIT)
++ *
++ * Copyright (c) 2022 HuangYunXuan
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#include "common-hal/matrix2/__init__.h"
+diff --git a/ports/nrf/common-hal/matrix2/__init__.h b/ports/nrf/common-hal/matrix2/__init__.h
+new file mode 100644
+index 000000000..1f1e17c22
+--- /dev/null
++++ b/ports/nrf/common-hal/matrix2/__init__.h
+@@ -0,0 +1,32 @@
++/*
++ * This file is part of the CircuitPython project, https://github.com/adafruit/circuitpython
++ *
++ * The MIT License (MIT)
++ *
++ * Copyright (c) 2022 HuangYunXuan
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#ifndef COMMON_HAL_MATRIX2___INIT___H
++#define COMMON_HAL_MATRIX2___INIT___H
++
++// nothing for the moment
++
++#endif // COMMON_HAL_MATRIX2___INIT___H
+diff --git a/py/circuitpy_defns.mk b/py/circuitpy_defns.mk
+index 0ae3341b3..7850c9168 100644
+--- a/py/circuitpy_defns.mk
++++ b/py/circuitpy_defns.mk
+@@ -211,6 +211,9 @@ endif
+ ifeq ($(CIRCUITPY_MATH),1)
+ SRC_PATTERNS += math/%
+ endif
++ifeq ($(CIRCUITPY_MATRIX2),1)
++SRC_PATTERNS += matrix2/%
++endif
+ ifeq ($(CIRCUITPY_MEMORYMONITOR),1)
+ SRC_PATTERNS += memorymonitor/%
+ endif
+@@ -407,6 +410,8 @@ SRC_COMMON_HAL_ALL = \
+ 	gnss/SatelliteSystem.c \
+ 	i2cperipheral/I2CPeripheral.c \
+ 	i2cperipheral/__init__.c \
++	matrix2/__init__.c \
++	matrix2/Matrix2.c \
+ 	microcontroller/Pin.c \
+ 	microcontroller/Processor.c \
+ 	microcontroller/__init__.c \
+diff --git a/py/circuitpy_mpconfig.mk b/py/circuitpy_mpconfig.mk
+index 189954109..ecd3d00c5 100644
+--- a/py/circuitpy_mpconfig.mk
++++ b/py/circuitpy_mpconfig.mk
+@@ -264,6 +264,9 @@ CFLAGS += -DCIRCUITPY_KEYPAD=$(CIRCUITPY_KEYPAD)
+ CIRCUITPY_MATH ?= 1
+ CFLAGS += -DCIRCUITPY_MATH=$(CIRCUITPY_MATH)
+ 
++CIRCUITPY_MATRIX2 ?= 1
++CFLAGS += -DCIRCUITPY_MATRIX2=$(CIRCUITPY_MATRIX2)
++
+ CIRCUITPY_MEMORYMONITOR ?= 0
+ CFLAGS += -DCIRCUITPY_MEMORYMONITOR=$(CIRCUITPY_MEMORYMONITOR)
+ 
+diff --git a/shared-bindings/matrix2/Matrix2.c b/shared-bindings/matrix2/Matrix2.c
+new file mode 100644
+index 000000000..d88bd950a
+--- /dev/null
++++ b/shared-bindings/matrix2/Matrix2.c
+@@ -0,0 +1,410 @@
++/*
++ * This file is part of the CircuitPython project, https://github.com/adafruit/circuitpython
++ *
++ * The MIT License (MIT)
++ *
++ * Copyright (c) 2022 HuangYunXuan
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#include "py/obj.h"
++#include "py/objproperty.h"
++#include "py/runtime.h"
++#include "py/objarray.h"
++
++#include "common-hal/matrix2/Matrix2.h"
++#include "shared-bindings/matrix2/__init__.h"
++#include "shared-bindings/matrix2/Matrix2.h"
++#include "shared-bindings/microcontroller/Pin.h"
++#include "supervisor/port.h"
++
++// MP_QSTR_* will be generated when compiling
++
++//| class Matrix2:
++//|     """Manage a 2D matrix of keys with row and column pins."""
++//|
++//|     def __init__(self, row_pins: Sequence[microcontroller.Pin], column_pins: Sequence[microcontroller.Pin], columns_to_anodes: bool = True, max_events: int = 64, max_bit_count = 6, active_bit_count = 4, inactive_bit_count = 2) -> None:
++//|         """
++//|         Create a `Matrix2` object that will scan the key matrix attached to the given row and column pins.
++//|         There should not be any external pull-ups or pull-downs on the matrix:
++//|         ``Matrix2`` enables internal pull-ups or pull-downs on the pins as necessary.
++//|
++//|         The keys are numbered sequentially from zero. A key number can be computed
++//|         by ``row * len(column_pins) + column``.
++//|
++//|         The instance of `Matrix2` can be iterated to get available key events. Each event is one byte,
++//|         the lowest 7 bits indicates the key triggered, the most significant bit indicates the triggering state.
++//|         For example, the lift (0x80) of the key at the first row and the first column (0x00) will generate the event (0x80 | 0x00) = 0x81.
++//|
++//|         :param Sequence[microcontroller.Pin] row_pins: The pins attached to the rows.
++//|         :param Sequence[microcontroller.Pin] column_pins: The pins attached to the colums.
++//|         :param bool columns_to_anodes: Default ``True``.
++//|           If the matrix uses diodes, the diode anodes are typically connected to the column pins,
++//|           and the cathodes should be connected to the row pins. If your diodes are reversed,
++//|           set ``columns_to_anodes`` to ``False``.
++//|         :param int max_events: maximum size of `events` `EventQueue`:
++//|           maximum number of key transition events that are saved.
++//|           Must be >= 1.
++//|           If a new event arrives when the queue is full, the oldest event is discarded.
++//|         :param int max_bit_count: the maxium bit count to record a key's average status
++//|         :param int active_bit_count: the bit count to consider a key is pressed
++//|         :param int inactive_bit_count: the bit count to consider a key is released
++//|         """
++//|         ...
++
++STATIC mp_obj_t matrix2_matrix2_make_new(const mp_obj_type_t *type, size_t n_args, size_t n_kw, const mp_obj_t *all_args) {
++    matrix2_matrix2_obj_t *self = m_new_obj(matrix2_matrix2_obj_t);
++    self->base.type = &matrix2_matrix2_type;
++
++    enum {ARG_row_pins, ARG_column_pins, ARG_columns_to_anodes, ARG_max_events,
++        ARG_max_bit_count, ARG_active_bit_count, ARG_inactive_bit_count};
++
++    static const mp_arg_t allowed_args[] = {
++        { MP_QSTR_row_pins, MP_ARG_REQUIRED | MP_ARG_OBJ },
++        { MP_QSTR_column_pins, MP_ARG_REQUIRED | MP_ARG_OBJ },
++        { MP_QSTR_columns_to_anodes, MP_ARG_KW_ONLY | MP_ARG_BOOL, {.u_bool = true} },
++        { MP_QSTR_max_events, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 64} },
++        { MP_QSTR_max_bit_count, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 6} },
++        { MP_QSTR_active_bit_count, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 4} },
++        { MP_QSTR_inactive_bit_count, MP_ARG_KW_ONLY | MP_ARG_INT, {.u_int = 2} },
++    };
++    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
++    mp_arg_parse_all_kw_array(n_args, n_kw, all_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
++
++    mp_obj_t row_pins = args[ARG_row_pins].u_obj;
++    // mp_obj_len() will be >= 0.
++    const size_t num_row_pins = (size_t)MP_OBJ_SMALL_INT_VALUE(mp_obj_len(row_pins));
++
++    mp_obj_t column_pins = args[ARG_column_pins].u_obj;
++    const size_t num_column_pins = (size_t)MP_OBJ_SMALL_INT_VALUE(mp_obj_len(column_pins));
++
++    const size_t max_events = (size_t)mp_arg_validate_int_min(args[ARG_max_events].u_int, 1, MP_QSTR_max_events);
++    const size_t max_bit_count_pre = (size_t)mp_arg_validate_int_min(args[ARG_max_bit_count].u_int, 1, MP_QSTR_max_bit_count);
++    const size_t max_bit_count = (size_t)mp_arg_validate_int_max(max_bit_count_pre, 15, MP_QSTR_max_bit_count);
++    const size_t active_bit_count = (size_t)mp_arg_validate_int_max(args[ARG_active_bit_count].u_int, (mp_int_t)max_bit_count, MP_QSTR_active_bit_count);
++    mp_int_t inactive_bit_count_pre = mp_arg_validate_int_min(args[ARG_inactive_bit_count].u_int, 1, MP_QSTR_inactive_bit_count);
++    const size_t inactive_bit_count = (size_t)mp_arg_validate_int_max((mp_int_t)inactive_bit_count_pre, (mp_int_t)(max_bit_count - 1), MP_QSTR_inactive_bit_count);
++
++    const mcu_pin_obj_t *row_pins_array[num_row_pins];
++    const mcu_pin_obj_t *column_pins_array[num_column_pins];
++
++    validate_no_duplicate_pins_2(row_pins, column_pins, MP_QSTR_row_pins, MP_QSTR_column_pins);
++
++    for (size_t row = 0; row < num_row_pins; row++) {
++        const mcu_pin_obj_t *pin =
++            validate_obj_is_free_pin(mp_obj_subscr(row_pins, MP_OBJ_NEW_SMALL_INT(row), MP_OBJ_SENTINEL));
++        row_pins_array[row] = pin;
++    }
++
++    for (size_t column = 0; column < num_column_pins; column++) {
++        const mcu_pin_obj_t *pin =
++            validate_obj_is_free_pin(mp_obj_subscr(column_pins, MP_OBJ_NEW_SMALL_INT(column), MP_OBJ_SENTINEL));
++        column_pins_array[column] = pin;
++    }
++
++    if (num_column_pins * num_row_pins == 0) {
++        mp_raise_ValueError(MP_ERROR_TEXT("either col's or row's length is zero, not a valid matrix!"));
++    }
++
++    common_hal_matrix2_matrix2_construct(self, num_row_pins, row_pins_array, num_column_pins, column_pins_array,
++        args[ARG_columns_to_anodes].u_bool, max_events, max_bit_count, active_bit_count, inactive_bit_count);
++
++    return MP_OBJ_FROM_PTR(self);
++}
++
++// deinit: deinitialze every thing
++STATIC mp_obj_t matrix2_matrix2_deinit(mp_obj_t self_in) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    common_hal_matrix2_matrix2_deinit(self);
++    return mp_const_none;
++}
++MP_DEFINE_CONST_FUN_OBJ_1(matrix2_matrix2_deinit_obj, matrix2_matrix2_deinit);
++
++// suspend: suspend the keyboard, the keyboard can be waked up with any key press
++STATIC mp_obj_t matrix2_matrix2_suspend(mp_obj_t self_in) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    int status = common_hal_matrix2_matrix2_suspend(self);
++    return mp_obj_new_int(status);
++}
++MP_DEFINE_CONST_FUN_OBJ_1(matrix2_matrix2_suspend_obj, matrix2_matrix2_suspend);
++
++//|     rows: int = ...
++//|     """The row count of the matrix. (read-only)"""
++//|
++STATIC mp_obj_t matrix2_matrix2_get_rows(mp_obj_t self_in) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    mp_uint_t row_count = common_hal_matrix2_matrix2_get_row_count(self);
++    return MP_OBJ_NEW_SMALL_INT(row_count);
++}
++MP_DEFINE_CONST_FUN_OBJ_1(matrix2_matrix2_get_rows_obj, matrix2_matrix2_get_rows);
++// make it a property
++const mp_obj_property_t matrix2_matrix2_rows_obj = {
++    .base.type = &mp_type_property,
++    .proxy = {(mp_obj_t)&matrix2_matrix2_get_rows_obj,
++              mp_const_none,
++              mp_const_none},
++};
++
++//|     cols: int = ...
++//|     """The column count of the matrix. (read-only)"""
++//|
++STATIC mp_obj_t matrix2_matrix2_get_cols(mp_obj_t self_in) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    mp_uint_t column_count = common_hal_matrix2_matrix2_get_column_count(self);
++    return MP_OBJ_NEW_SMALL_INT(column_count);
++}
++MP_DEFINE_CONST_FUN_OBJ_1(matrix2_matrix2_get_cols_obj, matrix2_matrix2_get_cols);
++// make it a property
++const mp_obj_property_t matrix2_matrix2_cols_obj = {
++    .base.type = &mp_type_property,
++    .proxy = {(mp_obj_t)&matrix2_matrix2_get_cols_obj,
++              mp_const_none,
++              mp_const_none},
++};
++
++//|     key_count: int = ...
++//|     """The number of keys that are being scanned. (read-only)"""
++//|
++STATIC mp_obj_t matrix2_matrix2_get_key_count(mp_obj_t self_in) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    return MP_OBJ_NEW_SMALL_INT(self->key_count);
++}
++MP_DEFINE_CONST_FUN_OBJ_1(matrix2_matrix2_get_key_count_obj, matrix2_matrix2_get_key_count);
++// make it a property
++const mp_obj_property_t matrix2_matrix2_key_count_obj = {
++    .base.type = &mp_type_property,
++    .proxy = {(mp_obj_t)&matrix2_matrix2_get_key_count_obj,
++              mp_const_none,
++              mp_const_none},
++};
++
++//get
++STATIC mp_obj_t matrix2_matrix2_get(mp_obj_t self_in) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    mp_int_t event_byte = ringbuf_get(&self->encoded_events);
++    if (event_byte < 0) {
++        return mp_const_none;
++    } else {
++        return mp_obj_new_int(event_byte);
++    }
++}
++MP_DEFINE_CONST_FUN_OBJ_1(matrix2_matrix2_get_obj, matrix2_matrix2_get);
++
++//scan, issue scan request
++STATIC mp_obj_t matrix2_matrix2_scan(mp_obj_t self_in) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    common_hal_matrix2_matrix2_scan(self);
++    return mp_const_none;
++}
++MP_DEFINE_CONST_FUN_OBJ_1(matrix2_matrix2_scan_obj, matrix2_matrix2_scan);
++
++//generate events
++STATIC mp_obj_t matrix2_matrix2_generate_events(mp_obj_t self_in) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    mp_int_t event_count = common_hal_matrix2_matrix2_generate_events(self);
++    return mp_obj_new_int(event_count);
++}
++MP_DEFINE_CONST_FUN_OBJ_1(matrix2_matrix2_generate_events_obj, matrix2_matrix2_generate_events);
++
++//test scan, not implemented
++STATIC mp_obj_t matrix2_matrix2_test_scan(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
++    enum { ARG_cycle };
++    static const mp_arg_t allowed_args[] = {
++        { MP_QSTR_cycle, MP_ARG_INT, {.u_int = 10000} },
++    };
++    // matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(pos_args[0]);
++
++    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
++    mp_arg_parse_all(n_args - 1, pos_args + 1, kw_args, MP_ARRAY_SIZE(allowed_args), allowed_args, args);
++
++    int cycle_count = args[ARG_cycle].u_int;
++
++    return cycle_count > 0 ? mp_obj_new_int(cycle_count) : mp_obj_new_int(0);
++}
++MP_DEFINE_CONST_FUN_OBJ_KW(matrix2_matrix2_test_scan_obj, 1, matrix2_matrix2_test_scan);
++
++//max bit count
++STATIC mp_obj_t matrix2_matrix2_get_max_bit_count(mp_obj_t self_in) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    return mp_obj_new_int(self->max_bit_count);
++}
++MP_DEFINE_CONST_FUN_OBJ_1(matrix2_matrix2_get_max_bit_count_obj, matrix2_matrix2_get_max_bit_count);
++
++STATIC mp_obj_t matrix2_matrix2_set_max_bit_count(mp_obj_t self_in, mp_obj_t value) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    uint16_t max_bit_count = mp_obj_get_int(value);
++    self->max_bit_count = max_bit_count < 16 ? max_bit_count : 15;
++    return mp_const_none;
++}
++MP_DEFINE_CONST_FUN_OBJ_2(matrix2_matrix2_set_max_bit_count_obj, matrix2_matrix2_set_max_bit_count);
++
++const mp_obj_property_t matrix2_matrix2_max_bit_count_obj = {
++    .base.type = &mp_type_property,
++    .proxy = {(mp_obj_t)&matrix2_matrix2_get_max_bit_count_obj,
++              (mp_obj_t)&matrix2_matrix2_set_max_bit_count_obj,
++              mp_const_none},
++};
++
++//active bit count, no check
++STATIC mp_obj_t matrix2_matrix2_get_active_bit_count(mp_obj_t self_in) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    return mp_obj_new_int(self->active_bit_count);
++}
++MP_DEFINE_CONST_FUN_OBJ_1(matrix2_matrix2_get_active_bit_count_obj, matrix2_matrix2_get_active_bit_count);
++
++STATIC mp_obj_t matrix2_matrix2_set_active_bit_count(mp_obj_t self_in, mp_obj_t value) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    uint16_t bit_count = mp_obj_get_int(value);
++    self->active_bit_count = bit_count;
++    return mp_const_none;
++}
++MP_DEFINE_CONST_FUN_OBJ_2(matrix2_matrix2_set_active_bit_count_obj, matrix2_matrix2_set_active_bit_count);
++
++const mp_obj_property_t matrix2_matrix2_active_bit_count_obj = {
++    .base.type = &mp_type_property,
++    .proxy = {(mp_obj_t)&matrix2_matrix2_get_active_bit_count_obj,
++              (mp_obj_t)&matrix2_matrix2_set_active_bit_count_obj,
++              mp_const_none},
++};
++
++//inactive bit count, no check
++STATIC mp_obj_t matrix2_matrix2_get_inactive_bit_count(mp_obj_t self_in) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    return mp_obj_new_int(self->inactive_bit_count);
++}
++MP_DEFINE_CONST_FUN_OBJ_1(matrix2_matrix2_get_inactive_bit_count_obj, matrix2_matrix2_get_inactive_bit_count);
++
++STATIC mp_obj_t matrix2_matrix2_set_inactive_bit_count(mp_obj_t self_in, mp_obj_t value) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    uint16_t bit_count = mp_obj_get_int(value);
++    self->inactive_bit_count = bit_count;
++    return mp_const_none;
++}
++MP_DEFINE_CONST_FUN_OBJ_2(matrix2_matrix2_set_inactive_bit_count_obj, matrix2_matrix2_set_inactive_bit_count);
++
++const mp_obj_property_t matrix2_matrix2_inactive_bit_count_obj = {
++    .base.type = &mp_type_property,
++    .proxy = {(mp_obj_t)&matrix2_matrix2_get_inactive_bit_count_obj,
++              (mp_obj_t)&matrix2_matrix2_set_inactive_bit_count_obj,
++              mp_const_none},
++};
++
++// sliceable(but only getitem)
++STATIC mp_obj_t matrix2_matrix2_subscr(mp_obj_t self_in, mp_obj_t index_in, mp_obj_t value) {
++    if (value == MP_OBJ_NULL) {
++        // delete item
++        // slice deletion
++        return MP_OBJ_NULL; // op not supported
++    } else {
++        matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++        if (mp_obj_is_type(index_in, &mp_type_slice)) {
++            mp_raise_NotImplementedError(translate("Slices not supported"));
++        } else {
++            // Single index rather than slice.
++            size_t index = mp_get_index(self->base.type, ringbuf_num_filled(&self->encoded_events), index_in, false);
++            if (value == MP_OBJ_SENTINEL) {
++                // load, with hack
++                size_t real_index = (self->encoded_events.iget + index) % self->encoded_events.size;
++                uint8_t value_out = self->encoded_events.buf[real_index];
++                return MP_OBJ_NEW_SMALL_INT(value_out);
++            } else {
++                mp_raise_AttributeError(translate("Read-only"));
++            }
++        }
++    }
++}
++
++// unary op
++STATIC mp_obj_t matrix2_matrix2_unary_op(mp_unary_op_t op, mp_obj_t self_in) {
++    matrix2_matrix2_obj_t *self = MP_OBJ_TO_PTR(self_in);
++    size_t length = ringbuf_num_filled(&self->encoded_events);
++    switch (op) {
++        case MP_UNARY_OP_BOOL: return mp_obj_new_bool(length != 0);
++        case MP_UNARY_OP_LEN: return MP_OBJ_NEW_SMALL_INT(length);
++        default: return MP_OBJ_NULL; // op not supported
++    }
++}
++
++// iterable
++typedef struct _matrix2_matrix2_it_t {
++    mp_obj_base_t base;
++    ringbuf_t *r;
++} matrix2_matrix2_it_t;
++
++STATIC mp_obj_t matrix2_matrix2_it_iternext(mp_obj_t self_in) {
++    matrix2_matrix2_it_t *self = MP_OBJ_TO_PTR(self_in);
++    int value = ringbuf_get(self->r);
++    if ( value != -1 ) {
++        return MP_OBJ_NEW_SMALL_INT(value);
++    } else {
++        return MP_OBJ_STOP_ITERATION;
++    }
++}
++
++// matrix2 iterator
++const mp_obj_type_t matrix2_matrix2_type_iter = {
++    { &mp_type_type },
++    .flags = MP_TYPE_FLAG_EXTENDED,
++    .name = MP_QSTR_iterator,
++    MP_TYPE_EXTENDED_FIELDS(
++        .getiter = mp_identity_getiter,
++        .iternext = matrix2_matrix2_it_iternext,
++        ),
++};
++
++// __iter__
++STATIC mp_obj_t matrix2_matrix2_getiter(mp_obj_t o_in, mp_obj_iter_buf_t *iter_buf) {
++    matrix2_matrix2_obj_t *o = MP_OBJ_TO_PTR(o_in);
++    assert(sizeof(matrix2_matrix2_it_t) <= sizeof(mp_obj_iter_buf_t));
++    matrix2_matrix2_it_t *o_it = (matrix2_matrix2_it_t *)iter_buf;
++    o_it->base.type = &matrix2_matrix2_type_iter;
++    o_it->r = &(o->encoded_events);
++    return MP_OBJ_FROM_PTR(o_it);
++}
++
++// module attributes
++STATIC const mp_rom_map_elem_t matrix2_matrix2_locals_dict_table[] = {
++    { MP_ROM_QSTR(MP_QSTR_deinit), MP_ROM_PTR(&matrix2_matrix2_deinit_obj) },   // deinit
++    { MP_ROM_QSTR(MP_QSTR_suspend), MP_ROM_PTR(&matrix2_matrix2_suspend_obj) }, // suspend/sleep, low power mode, wake by keypress
++    { MP_ROM_QSTR(MP_QSTR_rows), MP_ROM_PTR(&matrix2_matrix2_rows_obj) },       // get row count
++    { MP_ROM_QSTR(MP_QSTR_cols), MP_ROM_PTR(&matrix2_matrix2_cols_obj) },       // get col count
++    { MP_ROM_QSTR(MP_QSTR_key_count), MP_ROM_PTR(&matrix2_matrix2_key_count_obj) },  // get key count
++    { MP_ROM_QSTR(MP_QSTR_generate_events), MP_ROM_PTR(&matrix2_matrix2_generate_events_obj) },       // generate events and get event count
++    { MP_ROM_QSTR(MP_QSTR_get), MP_ROM_PTR(&matrix2_matrix2_get_obj) },         // get a event, None if no event
++    { MP_ROM_QSTR(MP_QSTR_scan), MP_ROM_PTR(&matrix2_matrix2_scan_obj) },       // issue scan, get a mask number(py int)
++    { MP_ROM_QSTR(MP_QSTR_max_bit_count), MP_ROM_PTR(&matrix2_matrix2_max_bit_count_obj) },             // max bit count
++    { MP_ROM_QSTR(MP_QSTR_active_bit_count), MP_ROM_PTR(&matrix2_matrix2_active_bit_count_obj) },       // active bit count
++    { MP_ROM_QSTR(MP_QSTR_inactive_bit_count), MP_ROM_PTR(&matrix2_matrix2_inactive_bit_count_obj) },   // inactive bit count
++};
++STATIC MP_DEFINE_CONST_DICT(matrix2_matrix2_locals_dict, matrix2_matrix2_locals_dict_table);
++
++// the module type
++const mp_obj_type_t matrix2_matrix2_type = {
++    { &mp_type_type },
++    .flags = MP_TYPE_FLAG_EXTENDED,
++    .name = MP_QSTR_Matrix2,
++    .make_new = matrix2_matrix2_make_new,
++    .locals_dict = (mp_obj_dict_t*)&matrix2_matrix2_locals_dict,
++    MP_TYPE_EXTENDED_FIELDS(
++        .subscr = matrix2_matrix2_subscr, // sliceable
++        .unary_op = matrix2_matrix2_unary_op, // has unary op
++        .getiter = matrix2_matrix2_getiter, // iterable
++        ),
++};
+\ No newline at end of file
+diff --git a/shared-bindings/matrix2/Matrix2.h b/shared-bindings/matrix2/Matrix2.h
+new file mode 100644
+index 000000000..a68abec42
+--- /dev/null
++++ b/shared-bindings/matrix2/Matrix2.h
+@@ -0,0 +1,56 @@
++/*
++ * This file is part of the CircuitPython project, https://github.com/adafruit/circuitpython
++ *
++ * The MIT License (MIT)
++ *
++ * Copyright (c) 2022 HuangYunXuan
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#ifndef SHARED_BINDINGS_MATRIX2_MATRIX2_H
++#define SHARED_BINDINGS_MATRIX2_MATRIX2_H
++
++#include "py/obj.h"
++#include "py/ringbuf.h"
++#include "py/objtuple.h"
++#include "py/objlist.h"
++
++#include "common-hal/digitalio/DigitalInOut.h"
++#include "shared-bindings/microcontroller/Pin.h"
++
++extern const mp_obj_type_t matrix2_matrix2_type;
++
++// the attributes of the Matrix2 object/instance
++typedef struct {
++    mp_obj_base_t base;
++    mp_obj_tuple_t *row_digitalinouts;
++    mp_obj_tuple_t *column_digitalinouts;
++    bool columns_to_anodes;
++    size_t key_count;
++    uint16_t *key_values;
++    bool *previously_pressed;
++    // bool *currently_pressed;
++    uint16_t max_bit_count;
++    uint16_t active_bit_count;
++    uint16_t inactive_bit_count;
++    ringbuf_t encoded_events;
++} matrix2_matrix2_obj_t;
++
++#endif // SHARED_BINDINGS_MATRIX2_MATRIX2_H
+diff --git a/shared-bindings/matrix2/__init__.c b/shared-bindings/matrix2/__init__.c
+new file mode 100644
+index 000000000..f0e197797
+--- /dev/null
++++ b/shared-bindings/matrix2/__init__.c
+@@ -0,0 +1,63 @@
++/*
++ * This file is part of the CircuitPython project, https://github.com/adafruit/circuitpython
++ *
++ * The MIT License (MIT)
++ *
++ * Copyright (c) 2022 HuangYunXuan
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#include <stdint.h>
++
++#include "py/obj.h"
++#include "py/runtime.h"
++
++#include "shared-bindings/matrix2/__init__.h"
++#include "shared-bindings/matrix2/Matrix2.h"
++
++//| """Support for scanning key matrices
++//|
++//| The `matrix2` module provides native support to scan sets of keys or buttons,
++//| connected in a row-and-column matrix.
++//| The major difference to the `keypad` module is the deboncing method.
++//| Also, this module is especially designed for Makerdiary M60 keyboard, so
++//| you may obtain this module as patches.
++//|
++//| To suspend the keyboard, TBW
++//| """
++//|
++
++// the global attributes table
++STATIC const mp_rom_map_elem_t matrix2_module_globals_table[] = {
++    { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_matrix2) },
++    { MP_ROM_QSTR(MP_QSTR_Matrix2), MP_ROM_PTR(&matrix2_matrix2_type) },
++    // add module level function below
++};
++
++STATIC MP_DEFINE_CONST_DICT(matrix2_module_globals, matrix2_module_globals_table);
++
++// define the module
++const mp_obj_module_t matrix2_module = {
++    .base = { &mp_type_module },
++    .globals = (mp_obj_dict_t*)&matrix2_module_globals,
++};
++
++// register the module
++MP_REGISTER_MODULE(MP_QSTR_matrix2, matrix2_module, CIRCUITPY_MATRIX2);
+diff --git a/shared-bindings/matrix2/__init__.h b/shared-bindings/matrix2/__init__.h
+new file mode 100644
+index 000000000..64362470d
+--- /dev/null
++++ b/shared-bindings/matrix2/__init__.h
+@@ -0,0 +1,34 @@
++/*
++ * This file is part of the CircuitPython project, https://github.com/adafruit/circuitpython
++ *
++ * The MIT License (MIT)
++ *
++ * Copyright (c) 2022 HuangYunXuan
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#ifndef SHARED_BINDINGS_MATRIX2___INIT___H
++#define SHARED_BINDINGS_MATRIX2___INIT___H
++
++#include "py/obj.h"
++
++// Nothing for the moment.
++
++#endif // SHARED_BINDINGS_MATRIX2___INIT___H
+-- 
+2.38.1
+
