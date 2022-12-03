@@ -320,11 +320,11 @@ class Keyboard:
 				key_id = event & 0x7F
 				press = (event & 0x80) == 0
 				logger.debug("Event: %d | %d" % (key_id, press))
+				last_active_time = time.time()
 
 				if press:
 					keys_down_time[key_id] = trigger_time
 					self._heatmap[key_id] += 1
-					last_active_time = time.time()
 
 					# trigger tapkey `hold` action when key down events detected
 					# This will alter self._layer_mask thus affect action_code
