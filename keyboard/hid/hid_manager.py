@@ -192,6 +192,8 @@ class HIDDeviceManager:
 			pass
 
 	async def switch_to_usb(self):
+		if not is_usb_connected():
+			return
 		interface = self._interfaces.get("usb", None)
 		if interface and self._current_interface_name != "usb":
 			logger.info("Switching to USB")
