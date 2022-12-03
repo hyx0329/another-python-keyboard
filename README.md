@@ -6,56 +6,73 @@ Based on Makerdiary M60 keyboard. This is a firmware written (mostly) in python.
 
 ## Introduction
 
-This is a project starts from customizing my M60 keyboard. I adjusted the keymap, updated the CircuitPython runtime, and now I'm here, *refactored* the python part. Some weird issue are fixed, and the module becomes very extensible.
+This project is refactored from [Makerdiary's `python-keyboard`](https://github.com/makerdiary/python-keyboard) with following advantages:
 
-The features are similar, the keymaps are compatible.
+- easier to port
+- easier to extend
+- core code and hardware dependent code decoupled
 
-+ keymaps and hardware_module are device-specific code, implement your own
-    + 3 implemention references given,
-        - pure python
-        - using `keypad` module
-            - because `keypad` provides only a blocking method, the backlight is not fully implemented
-        - using custom `matrix2` module(support a special suspend mode)
+and with following limitations:
 
-*The original project just doesn't satisfy me. The backlight, the portability, the CircuitPython version, etc.*
+- no pair key support
+- no mouse key support(for the moment)
+- no persistent settings(memory), but should be easy to implement
+    - keyboard will not connect to the last connected device after power on
+    - the heatmap is reseted on each boot
 
 *Since this is mostly a rewrite of `python-keyboard`, I repurposed lots of code to support the hardware or simplify the development.*
 
-## Difference to `python-keyboard` by Makerdiary
 
-- decoupled, can be easily ported to another device
-- async
-    - no blocking delay or wait
-    - backlight behaves consistently(no more refresh rate changes)
-- NKRO
-    - switch between NKRO and 6KRO by changing configuration file (USB only)
-- do NOT have persistent settings(e.g. store last bluetooth ID/heatmap)
-    - I might implement it but it's not useful to me
-    - the heatmap can still be printed to the serial console
-- do NOT have pair key support
-- do NOT have mouse support (for the moment)
+## Differences
+
+Actually there's no much difference that end users can aware.
+
+The keymaps are compatible(the code processing the keymaps are the same).
+
+Missing features:
+
+- mouse key
+- pair key
+- persistent status(BT ID, heatmap are reseted on each boot)
+
+Changed features:
+
+- macro handlers are coroutines now, you can update yours just to add `async` before `def`
 
 ## How to install
 
 If you are a M60 keyboard user, I'd suggest to:
 
-- install my customized firmware in `circuitpython-firmware-for-m60-keyboard`
-- tweak the keyboard configurations(or do it later)
+- install customized firmware in `circuitpython-firmware-for-m60-keyboard`
+- tweak the keyboard configurations in `keyboard_config.py`(or do it later)
 - copy file/folder listed below to the FAT drive
-    - `boot.py`
-    - `code.py`
-    - `keyboard_config.py`
-    - `nkro_utils.py`
-    - `keyboard`
-    - `keymaps`
-    - `m60_matrix2`
+  - `boot.py`
+  - `code.py`
+  - `keyboard_config.py`
+  - `nkro_utils.py`
+  - `keyboard`
+  - `keymaps`
+  - `m60_matrix2`
 - copy the `lib` folder to the drive, or install the following libraries
-    - `adafruit_logging` (unless you manually remove every logging line)
-    - `adafruit_ble`
-    - `adafruit_ticks`
-    - `asyncio`
+  - `adafruit_logging` (unless you manually remove every logging line)
+  - `adafruit_ble`
+  - `adafruit_ticks`
+  - `asyncio`
+- restart/reset the hardware
+  - run `microcontroller.reset()`
 
 ## How to port to a differernt device
 
 For the moment, read `design.md` and the comments in the source files.
 
+### Hardware Interface
+
+For each board you want to support, you only need to implement a `KeyboardHardware` class with a set of methods, read `design.md` for more details.
+
+3 reference implementations given:
+
+- pure python(`m60_py`)
+- using `keypad` module(`m60_keypad`)
+  - because `keypad` provides only a blocking method, the backlight is not fully implemented
+- using custom `matrix2` module(support a special suspend mode)(`m60_matrix2`)
+  - need to use the customized firmware
