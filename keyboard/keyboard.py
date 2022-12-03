@@ -72,11 +72,13 @@ class Keyboard:
 		assert hasattr(hardware, "get_all_tasks")
 		assert hasattr(hardware, "get_keys")
 		assert hasattr(hardware, "hardware_spec")
-		assert hasattr(hardware, "key_name")
 		assert hasattr(hardware, "key_count")
 		assert hasattr(hardware, "suspend")
 		assert hasattr(hardware, "register_hid_info")
 		iter(hardware)  # hardware should be iterable ( to get key events )
+		# optional APIs
+		if not hasattr(hardware, "key_name"):
+			hardware.key_name = lambda *_: "Unknown"
 	
 	def _generate_hid_manager_parameters_from_hardware_spec(self, hardware_spec):
 		params = dict()
