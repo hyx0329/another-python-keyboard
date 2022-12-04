@@ -294,16 +294,16 @@ class Keyboard:
 
 
 		# for auto suspend, like a watch dog
-		last_active_time = time.time()
+		last_active_time = time.monotonic()
 		suspend_time_limit = 10 * 60  # 10 min
 
 		# report loop
 		while True:
-			if time.time() - last_active_time > suspend_time_limit:
+			if time.monotonic() - last_active_time > suspend_time_limit:
 				logger.info("Auto suspend the keyboard")
 				await input_hardware.suspend()
 				# set last_active_time in case suspend is a dummy function
-				last_active_time = time.time()
+				last_active_time = time.monotonic()
 
 			# switch task, give some time to the scanner
 			await asyncio.sleep(0)
@@ -330,7 +330,7 @@ class Keyboard:
 				key_id = event & 0x7F
 				press = (event & 0x80) == 0
 				logger.debug("Event: %d | %d" % (key_id, press))
-				last_active_time = time.time()
+				last_active_time = time.monotonic()
 
 				if press:
 					keys_down_time[key_id] = trigger_time
