@@ -544,7 +544,7 @@ LAYER_OFF = lambda layer, on: LAYER_BIT_AND(layer//4, ~(1 << (layer % 4)), on)
 
 LAYER_TAP = lambda layer, key=NO: ACTION(ACT_LAYER_TAP, (layer << 8) | get_action_code(key))
 LAYER_TAP_TOGGLE = lambda layer: LAYER_TAP(layer, OP_TAP_TOGGLE)
-LAYER_MODS = lambda layer, mods: LAYER_TAP(layer, 0xC0 | mods)
+LAYER_MODS = lambda layer, mods=0: LAYER_TAP(layer, 0xC0 | mods)
 
 ACTION_USAGE_SYSTEM = lambda n: ACTION(ACT_USAGE, n)
 ACTION_USAGE_CONSUMER = lambda n: ACTION(ACT_USAGE, 1 << 10 | (n))
