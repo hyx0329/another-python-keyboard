@@ -171,7 +171,7 @@ class HIDInterfaceWrapper:
 		self.report_mouse[0] &= ~buttons
 		await self._send_mouse()
 
-	async def mouse_move(self, buttons, x=0, y=0, wheel=0):
+	async def mouse_move(self, x=0, y=0, wheel=0):
 		self.report_mouse[1] = x & 0xFF
 		self.report_mouse[2] = y & 0xFF
 		self.report_mouse[3] = wheel & 0xFF

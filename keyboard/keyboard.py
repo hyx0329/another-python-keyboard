@@ -43,6 +43,10 @@ class Keyboard:
 		self._macro_handler = None
 		self._tap_thresh = time_tap_thresh # micro second
 		self._tap_delay = time_tap_delay # micro second
+		self._mouse_status = 0
+		self._mouse_time = 0
+		self._mouse_move = [0,0,0]
+		self._mouse_speed = 1
 		self.keys_last_action_code = None
 		self.keys_down_time = None
 		self.keys_up_time = None
@@ -239,6 +243,50 @@ class Keyboard:
 		elif action_code == VAL_RGB:
 			backlight.val -= 8
 
+	async def _update_mouse_movement(self):
+		if self._mouse_status <= 0:
+			return
+		x, y, wheel = self._mouse_move
+		current_time = time.monotonic_ns()
+		dt = current_time - self._mouse_time
+		distance = max(1, dt * self._mouse_speed // 40000000)
+		self._mouse_time = current_time
+		await self.hid_manager.mouse_move(x * distance, y * distance, wheel)
+		logger.debug('dt %f, distance %d' % (dt, distance))
+		# TODO: better acceleration curve
+		if self._mouse_speed < 50:
+			self._mouse_speed += 1
+
+	async def _handle_action_mouse_press(self, action_code):
+		mouse_code = (action_code >> 8) & 0xF
+		if mouse_code == 0: # BTN1~5
+			await self.hid_manager.mouse_press(action_code & 0xF)
+		elif mouse_code >= 11: # MS_ACC
+			self._mouse_speed += 1
+		else:
+			self._mouse_status += 1
+			m = MS_MOVEMENT[mouse_code]
+			self._mouse_move[0] += m[0]
+			self._mouse_move[1] += m[1]
+			self._mouse_move[2] += m[2]
+			self._mouse_time = time.monotonic_ns()
+
+	async def _handle_action_mouse_release(self, action_code):
+		mouse_code = (action_code >> 8) & 0xF
+		if mouse_code == 0: # BTN1~5
+			await self.hid_manager.mouse_release(action_code & 0xF)
+		elif mouse_code >= 11: # MS_ACC
+			self._mouse_speed -= 1
+		else:
+			self._mouse_status -= 1
+			m = MS_MOVEMENT[mouse_code]
+			self._mouse_move[0] -= m[0]
+			self._mouse_move[1] -= m[1]
+			self._mouse_move[2] -= m[2]
+			if self._mouse_status == 0:
+				self._mouse_speed = 1
+				await self.hid_manager.mouse_move() # reset mouse movement
+
 	async def _main_routine(self):
 		# there's some circuitpython limit that prevents too many long function calls
 		# so I have to write everything in one loop
@@ -322,6 +370,8 @@ class Keyboard:
 					await self._trigger_tapkey_action_hold(tap_key_last_id, tap_key_variant)
 					tap_key_variant = 0
 
+			# update mouse movements
+			await self._update_mouse_movement()
 
 			# process events
 			# Note: iter the input_hardware will also consume the events
@@ -388,7 +438,7 @@ class Keyboard:
 						if action_code & 0x400 > 0:
 							await hid_manager.consumer_control_press(action_code & 0x3FF)
 					elif key_variant == ACT_MOUSEKEY:
-						pass
+						await self._handle_action_mouse_press(action_code)
 					elif key_variant == ACT_LAYER:
 						await self._handle_action_layer_press(action_code)
 					elif key_variant == ACT_LAYER_TAP or key_variant == ACT_LAYER_TAP_EXT:
@@ -458,7 +508,7 @@ class Keyboard:
 						if action_code & 0x400 > 0:
 							await hid_manager.consumer_control_release(0)
 					elif key_variant == ACT_MOUSEKEY:
-						pass
+						await self._handle_action_mouse_release(action_code)
 					elif key_variant == ACT_LAYER:
 						await self._handle_action_layer_release(action_code)
 					elif key_variant == ACT_LAYER_TAP or key_variant == ACT_LAYER_TAP_EXT:

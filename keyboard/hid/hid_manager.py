@@ -307,8 +307,8 @@ class HIDDeviceManager:
 		await self.current_interface.mouse_release(buttons)
 
 	@async_no_fail
-	async def mouse_move(self, buttons, x=0, y=0, wheel=0):
-		await self.current_interface.mouse_move(buttons, x, y, wheel)
+	async def mouse_move(self, x=0, y=0, wheel=0):
+		await self.current_interface.mouse_move(x, y, wheel)
 
 	## Misc
 	def set_current_interface_name(self, value):
