@@ -11,14 +11,16 @@ This project is refactored from [Makerdiary's `python-keyboard`](https://github.
 - easier to port
 - easier to extend
 - core code and hardware dependent code decoupled
+- NKRO implemented
+- can easily switch to different keymaps with macros
 
 and with following limitations:
 
 - no pair key support
-- no mouse key support(for the moment)
 - no persistent settings(memory), but should be easy to implement
     - keyboard will not connect to the last connected device after power on
     - the heatmap is reseted on each boot
+- no auto profile(auto switch keymaps when using a specific BT ID)
 
 *Since this is mostly a rewrite of `python-keyboard`, I repurposed lots of code to support the hardware or simplify the development.*
 
@@ -31,13 +33,16 @@ The keymaps are compatible(the code processing the keymaps are the same).
 
 Missing features:
 
-- mouse key
-- pair key
+- pair keys
 - persistent status(BT ID, heatmap are reseted on each boot)
 
 Changed features:
 
 - macro handlers are coroutines now, you can update yours just to add `async` before `def`
+
+Improved:
+
+- backlight update
 
 ## How to install
 
@@ -61,7 +66,7 @@ If you are a M60 keyboard user, I'd suggest to:
 - restart/reset the hardware
   - run `microcontroller.reset()`
 
-## How to port to a differernt device
+## How to port to a different device
 
 For the moment, read `design.md` and the comments in the source files.
 
@@ -76,3 +81,4 @@ For each board you want to support, you only need to implement a `KeyboardHardwa
   - because `keypad` provides only a blocking method, the backlight is not fully implemented
 - using custom `matrix2` module(support a special suspend mode)(`m60_matrix2`)
   - need to use the customized firmware
+
