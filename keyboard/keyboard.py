@@ -283,6 +283,14 @@ class Keyboard:
 		#   |  dt1  |  dt2  |
 		# dt1 < tap_delay && dt2 < fast_type_thresh
 		# comparing dt2 and fast_type_thresh is not implemented
+		# then it becomes:
+		#  press    delay     thresh
+		#  |        ^         ^
+		#  v   1    |    2    |    3
+		# ----------+---------+---------> t
+		# 1: any key action will trigger `tap`
+		# 2: any `pressed` action will trigger `hold`, any `release` action will trigger `tap`
+		# 3: `hold` is triggered
 
 
 		# for auto suspend, like a watch dog
@@ -412,7 +420,7 @@ class Keyboard:
 					# detect tap key in a sequence
 					if tap_key_variant > 0:
 						duration = trigger_time - keys_down_time[tap_key_last_id]
-						if duration < tap_delay: # just a tap in a sequence
+						if duration < tap_thresh: # just a tap in a sequence
 							logger.debug("TAP/L/tap/sequence")
 							await self._trigger_tapkey_action_tap(tap_key_last_id, tap_key_variant)
 							tap_key_variant = 0
